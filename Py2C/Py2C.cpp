@@ -2,28 +2,19 @@
 
 namespace
 {
-  int pow2(int n)
+  constexpr int pow2(int n) noexcept
   {
-    if(n == 0)
-      return 1;
-    else
-      return 2*pow2(n-1);
-  }
-  std::string to_string(int value)
-  {
-    std::ostringstream ostr;
-    ostr << value;
-    return ostr.str();
+    return 1 << n;
   }
 }
 
 Parameter::Parameter() 
-  : value("INVALID"), section("INVALID"), isDefault(false), cRequired(false) 
+  : value("INVALID"), isDefault(false), cRequired(false), section("INVALID")
 {
 }
 
 Parameter::Parameter(const char* val, const char* sec, bool cReq, bool isDef) 
-  : value(val), section(sec), isDefault(isDef),cRequired(cReq)
+  : value(val), isDefault(isDef), cRequired(cReq), section(sec)
 {
 }
 
@@ -420,19 +411,19 @@ void Py2CConverter::check_and_fix_errors()
     if(nodex != (1+nprocx*mgunitx*pow2(levels-1)))
     {
       log_messages.push_back("# WARNING: changing mgunitx value to satisfy eqn 6.7");
-      parameters["mgunitx"].value = to_string((nodex - 1)/(nprocx*pow2(levels-1)));
+      parameters["mgunitx"].value = std::to_string((nodex - 1)/(nprocx*pow2(levels-1)));
       parameters["mgunitx"].isDefault = false;
     }
     if(nodey != (1+nprocy*mgunity*pow2(levels-1)))
     {
       log_messages.push_back("# WARNING: changing mgunity value to satisfy eqn 6.7");
-      parameters["mgunity"].value = to_string((nodey - 1)/(nprocy*pow2(levels-1)));
+      parameters["mgunity"].value = std::to_string((nodey - 1)/(nprocy*pow2(levels-1)));
       parameters["mgunity"].isDefault = false;
     }
     if(nodez != (1+nprocz*mgunitz*pow2(levels-1)))
     {
       log_messages.push_back("# WARNING: changing mgunitz value to satisfy eqn 6.7");
-      parameters["mgunitz"].value = to_string((nodez - 1)/(nprocz*pow2(levels-1)));
+      parameters["mgunitz"].value = std::to_string((nodez - 1)/(nprocz*pow2(levels-1)));
       parameters["mgunitz"].isDefault = false;
     }
   }

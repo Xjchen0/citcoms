@@ -35,8 +35,13 @@ bin/CitcomSRegional
 bin/citcoms
 bin/mpipycitcoms
 bin/pycitcoms
+bin/citcoms_combine
 visual/project_geoid
 Py2C/Py2C
+
+# build directories
+build/
+build_*/
 
 # ignore LaTex aux files, log files, etc
 *.aux

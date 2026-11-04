@@ -25,15 +25,17 @@
  * 
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-void setup_parser(struct All_variables *E, char *filename);
+#pragma once
+
+void setup_parser(struct All_variables *E, const char *filename);
 void shutdown_parser(struct All_variables *E);
 
-int input_string(char *name, char *value, char *Default, int m);
-int input_boolean(char *name, int *value, char *interpret, int m);
-int input_int(char *name, int *value, char *interpret, int m);
-int input_float(char *name, float *value, char *interpret, int m);
-int input_double(char *name, double *value, char *interpret, int m);
-int input_int_vector(char *name, int number, int *value, int m);
-int input_char_vector(char *name, int number, char *value, int m);
-int input_float_vector(char *name,int number, float *value, int m);
-int input_double_vector(char *name, int number, double *value, int m);
+int input_string(const char *name, char *value, const char *Default, int m);
+int input_boolean(const char *name, int *value, const char *interpret, int m);
+int input_int(const char *name, int *value, const char *interpret, int m);
+int input_float(const char *name, float *value, const char *interpret, int m);
+int input_double(const char *name, double *value, const char *interpret, int m);
+int input_int_vector(const char *name, int number, int *value, int m);
+int input_char_vector(const char *name, int number, char *value, int m);
+int input_float_vector(const char *name, int number, float *value, int m);
+int input_double_vector(const char *name, int number, double *value, int m);

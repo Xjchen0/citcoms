@@ -42,7 +42,7 @@ void isacalc(double [3][3], double *, double [3], struct All_variables *, int *)
 void f_times_ft(double [3][3], double [3][3]);
 void drex_eigen(double [3][3], double [3][3], int *);
 void malmul_scaled_id(double [3][3], double [3][3], double, double);
-void myerror_s(char *, struct All_variables *);
+void myerror_s(const char *, struct All_variables *);
 /* BC_util.c */
 void internal_horizontal_bc(struct All_variables *, float *[], int, int, float, unsigned int, char, int, int);
 void strip_bcs_from_residual(struct All_variables *, double **, int);
@@ -210,9 +210,11 @@ double global_p_norm2(struct All_variables *, double **);
 double global_div_norm2(struct All_variables *, double **);
 double global_tdot_d(struct All_variables *, double **, double **, int);
 float global_tdot(struct All_variables *, float **, float **, int);
-float global_fmin(struct All_variables *, double);
+float global_fmin(struct All_variables *, float);
+inline float global_fmin(struct All_variables *E, double a) { return global_fmin(E, static_cast<float>(a)); }
 double global_dmax(struct All_variables *, double);
-float global_fmax(struct All_variables *, double);
+float global_fmax(struct All_variables *, float);
+inline float global_fmax(struct All_variables *E, double a) { return global_fmax(E, static_cast<float>(a)); }
 double Tmaxd(struct All_variables *, double **);
 float Tmax(struct All_variables *, float **);
 double vnorm_nonnewt(struct All_variables *, double **, double **, int);
@@ -226,7 +228,7 @@ void convection_initial_temperature(struct All_variables *);
 /* Instructions.c */
 //void print_all_config_params(struct All_variables *);
 void initial_mesh_solver_setup(struct All_variables *);
-void read_instructions(struct All_variables *, char *);
+void read_instructions(struct All_variables *, const char *);
 //void print_all_config_parameters(struct All_variables *E);
 void initial_setup(struct All_variables *);
 void initialize_material(struct All_variables *);
@@ -239,8 +241,8 @@ void allocate_velocity_vars(struct All_variables *);
 void global_default_values(struct All_variables *);
 void check_bc_consistency(struct All_variables *);
 void set_up_nonmg_aliases(struct All_variables *, int);
-void report(struct All_variables *, char *);
-void record(struct All_variables *, char *);
+void report(struct All_variables *, const char *);
+void record(struct All_variables *, const char *);
 void common_initial_fields(struct All_variables *);
 void initial_pressure(struct All_variables *);
 void initial_velocity(struct All_variables *);
@@ -281,7 +283,7 @@ void viscy_from_element_to_nodes(struct All_variables *, float **, float **, int
 /* Output.c */
 void output_common_input(struct All_variables *);
 void output(struct All_variables *, int);
-FILE *output_open(char *, char *);
+FILE *output_open(const char *, const char *);
 void output_coord(struct All_variables *);
 void output_domain(struct All_variables *);
 void output_coord_bin(struct All_variables *);
@@ -303,7 +305,7 @@ void output_time(struct All_variables *, int);
 #ifdef USE_GZDIR
 /* Output_gzdir.c */
 void gzdir_output(struct All_variables *, int);
-gzFile gzdir_output_open(char *, char *);
+gzFile gzdir_output_open(const char *, const char *);
 void gzdir_output_coord(struct All_variables *);
 void gzdir_output_velo_temp(struct All_variables *, int);
 void gzdir_output_visc(struct All_variables *, int);
@@ -340,7 +342,7 @@ void h5input_params(struct All_variables *);
 void vtk_output(struct All_variables *, int);
 /* Pan_problem_misc_functions.c */
 int get_process_identifier(void);
-void unique_copy_file(struct All_variables *, char *, char *);
+void unique_copy_file(struct All_variables *, const char *, const char *);
 void apply_side_sbc(struct All_variables *);
 void get_buoyancy(struct All_variables *, double **);
 int read_double_vector(FILE *, int, double *);
@@ -357,7 +359,7 @@ void calc_cbase_at_node(int, int, float *, struct All_variables *);
 void convert_pvec_to_cvec(float, float, float, float *, float *);
 void convert_pvec_to_cvec_d(double, double, double, double *, double *);
 void *safe_malloc(size_t);
-void myerror(struct All_variables *, char *);
+void myerror(struct All_variables *, const char *);
 void get_r_spacing_fine(double *, struct All_variables *);
 void get_r_spacing_at_levels(double *, struct All_variables *);
 void normalize_vec3(float *, float *, float *);
@@ -372,19 +374,19 @@ void parallel_process_termination(void);
 void parallel_process_sync(struct All_variables *);
 double CPU_time0(void);
 /* Parsing.c */
-void setup_parser(struct All_variables *, char *);
+void setup_parser(struct All_variables *, const char *);
 void shutdown_parser(struct All_variables *);
-void add_to_parameter_list(char *, char *);
-int compute_parameter_hash_table(char *);
-int input_int(char *, int *, char *, int);
-int input_string(char *, char *, char *, int);
-int input_boolean(char *, int *, char *, int);
-int input_float(char *, float *, char *, int);
-int input_double(char *, double *, char *, int);
-int input_int_vector(char *, int, int *, int);
-int input_char_vector(char *, int, char *, int);
-int input_float_vector(char *, int, float *, int);
-int input_double_vector(char *, int, double *, int);
+void add_to_parameter_list(const char *, const char *);
+int compute_parameter_hash_table(const char *);
+int input_int(const char *, int *, const char *, int);
+int input_string(const char *, char *, const char *, int);
+int input_boolean(const char *, int *, const char *, int);
+int input_float(const char *, float *, const char *, int);
+int input_double(const char *, double *, const char *, int);
+int input_int_vector(const char *, int, int *, int);
+int input_char_vector(const char *, int, char *, int);
+int input_float_vector(const char *, int, float *, int);
+int input_double_vector(const char *, int, double *, int);
 int interpret_control_string(char *, int *, double *, double *, double *);
 /* Phase_change.c */
 void phase_change_allocate(struct All_variables *);

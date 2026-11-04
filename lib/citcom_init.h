@@ -26,21 +26,14 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
+#pragma once
 #if !defined(CITCOM_INIT_HDR)
 #define CITCOM_INIT_HDR
 
 #include "mpi.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-extern struct All_variables* citcom_init(MPI_Comm *world);
+struct All_variables* citcom_init(MPI_Comm *world);
 void citcom_finalize(struct All_variables *E, int status);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
 

@@ -33,7 +33,7 @@ the ggrd subroutines of the hc package
 */
 void ggrd_init_tracer_flavors(struct All_variables *);
 int layers_r(struct All_variables *,float );
-void myerror(struct All_variables *,char *);
+void myerror(struct All_variables *E, const char *message);
 void ggrd_full_temp_init(struct All_variables *);
 void ggrd_reg_temp_init(struct All_variables *);
 void ggrd_temp_init_general(struct All_variables *,int);

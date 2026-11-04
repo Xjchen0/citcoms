@@ -27,6 +27,8 @@
  */
 
 
+#pragma once
+
 struct CONVECTION { /* information controlling convection problems */
 
     int tic_method;
@@ -44,12 +46,7 @@ struct CONVECTION { /* information controlling convection problems */
   float blob_dT;
   int blob_bc_persist;
 
-    struct SOURCES {
-	    int number;
-	    float t_offset;
-	    float Q[10];
-	    float lambda[10];
-	}  heat_sources;
+    struct SOURCES heat_sources;
 
 
 

@@ -25,18 +25,11 @@
  * 
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+#pragma once
 #if !defined(CitcomS_drive_solvers_h)
 #define CitcomS_drive_solvers_h
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 void general_stokes_solver(struct All_variables*);
 void general_stokes_solver_setup(struct All_variables*);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

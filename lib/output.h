@@ -26,12 +26,9 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
+#pragma once
 #if !defined(CitcomS_output_h)
 #define CitcomS_output_h
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 void output_common_input(struct All_variables *);
 void output(struct All_variables *, int);
@@ -41,11 +38,7 @@ void output_coord_bin(struct All_variables *);
 void output_domain(struct All_variables *);
 void output_seismic(struct All_variables *, int);
 
-FILE* output_open(char *, char *);
-
-#ifdef __cplusplus
-}
-#endif
+FILE* output_open(const char *, const char *);
 
 #ifdef USE_GZDIR
 void gzdir_output(struct All_variables *, int );

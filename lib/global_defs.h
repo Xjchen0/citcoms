@@ -41,32 +41,45 @@ to functions across the whole filespace of CITCOM.
 #include <zlib.h>
 #endif
 
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <cstring>
+#include <cctype>
+#include <climits>
+#include <cfloat>
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
 #include "mpi.h"
-
-
 
 #ifdef USE_HDF5
 #include "hdf5.h"
 #endif
 
-#ifdef __cplusplus
-
-extern "C" {
-
-#else
-
-
-
-
-/* Macros */
-#define max(A,B) (((A) > (B)) ? (A) : (B))
-#define min(A,B) (((A) < (B)) ? (A) : (B))
-#define SWAP(a,b) {temp=(a);(a)=(b);(b)=temp;}
-
+template <typename T, typename U>
+constexpr auto citcom_min(const T& a, const U& b) {
+    return (a < b) ? a : b;
+}
+template <typename T, typename U>
+constexpr auto citcom_max(const T& a, const U& b) {
+    return (a > b) ? a : b;
+}
+#ifndef min
+#define min(A,B) citcom_min((A),(B))
+#endif
+#ifndef max
+#define max(A,B) citcom_max((A),(B))
+#endif
+#ifndef SWAP
+#define SWAP(a,b) std::swap((a),(b))
 #endif
 
 
@@ -715,6 +728,12 @@ struct CITCOM_GNOMONIC {
     double v;
 };
 
+struct SOURCES {
+    int number;
+    float t_offset;
+    float Q[10];
+    float lambda[10];
+};
 
 #ifdef USE_HDF5
 #include "hdf5_related.h"
@@ -878,10 +897,6 @@ struct All_variables {
   void (* temperatures_conform_bcs)(struct All_variables *);
 
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #ifndef TRUE
 #define TRUE 1

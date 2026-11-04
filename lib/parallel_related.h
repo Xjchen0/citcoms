@@ -26,20 +26,13 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
+#pragma once
 #if !defined(CitcomS_parallel_related_h)
 #define CitcomS_parallel_related_h
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void parallel_process_finalize();
-void parallel_process_termination();
+void parallel_process_finalize(void);
+void parallel_process_termination(void);
 void parallel_process_sync(struct All_variables *E);
-double CPU_time0();
-
-#ifdef __cplusplus
-}
-#endif
+double CPU_time0(void);
 
 #endif
