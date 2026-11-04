@@ -40,6 +40,7 @@ double modified_plgndr_a(int, int, double);
 void rtp2xyzd(double,double,double,double *);
 
 #include "initial_temperature.h"
+#include "checkpoints.h"
 static void debug_tic(struct All_variables *);
 static void read_tic_from_file(struct All_variables *);
 static void construct_tic_from_input(struct All_variables *);
@@ -277,15 +278,27 @@ static void read_tic_from_file(struct All_variables *E)
   float v1, v2, v3, g;
 
   ii = E->monitor.solution_cycles_init;
+
+  /* First attempt: read initial temperature directly from binary checkpoint (.chkpt) */
+  sprintf(output_file, "%s.chkpt.%d.%d", E->control.old_P_file, E->parallel.me, ii);
+  if (read_tic_from_checkpoint(E, output_file)) {
+    if (E->parallel.me == 0)
+      fprintf(E->fp, "Read initial temperature from checkpoint %s\n", output_file);
+    temperatures_conform_bcs(E);
+    return;
+  }
+
+  /* Fallback: read legacy ASCII .velo file */
   sprintf(output_file,"%s.velo.%d.%d",E->control.old_P_file,E->parallel.me,ii);
   fp=fopen(output_file,"r");
   if (fp == NULL) {
-    fprintf(E->fp,"(Initial_temperature.c #1) Cannot open %s\n",output_file);
+    fprintf(E->fp,"(Initial_temperature.c #1) Cannot open checkpoint (%s.chkpt.%d.%d) or velo file (%s)\n",
+            E->control.old_P_file, E->parallel.me, ii, output_file);
     parallel_process_termination();
   }
 
   if (E->parallel.me==0)
-    fprintf(E->fp,"Reading %s for initial temperature\n",output_file);
+    fprintf(E->fp,"Reading %s for initial temperature (fallback from checkpoint)\n",output_file);
 
   fgets(input_s,1000,fp);
   sscanf(input_s,"%d %d %f",&ll,&mm,&tt);

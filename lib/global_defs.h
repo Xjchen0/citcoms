@@ -636,6 +636,9 @@ struct gzd_struc{
 struct Output {
     char format[20];  /* ascii or hdf5 */
     char optional[1000]; /* comma-delimited list of objects to output */
+    char optional_ascii[1000];
+    char optional_vtk[1000];
+    char optional_h5[1000];
     char vtk_format[10]; /*ascii or binary */
 
     int llmax;  /* max degree of spherical harmonics output */

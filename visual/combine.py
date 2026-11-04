@@ -51,7 +51,7 @@ class Combine(object):
 
 
     def readData(self, filename, headlines=1):
-        fp = file(filename, 'r')
+        fp = open(filename, 'r')
 
         # discard the header
         for i in range(headlines):
@@ -78,12 +78,12 @@ class Combine(object):
         nodey = self.nodey
         nodez = self.nodez
 
-        mynodex = 1 + (nodex-1)/nprocx
-        mynodey = 1 + (nodey-1)/nprocy
-        mynodez = 1 + (nodez-1)/nprocz
+        mynodex = 1 + (nodex-1)//nprocx
+        mynodey = 1 + (nodey-1)//nprocy
+        mynodez = 1 + (nodez-1)//nprocz
 
         if not len(data) == mynodex * mynodey * mynodez:
-            raise ValueError, "incorrect data size"
+            raise ValueError("incorrect data size")
 
         mynxs = (mynodex - 1) * mylocx
         mynys = (mynodey - 1) * mylocy
@@ -96,7 +96,7 @@ class Combine(object):
                     m = k + j * nodez + i * nodex * nodez
                     self.saved[m] = data[n]
                     n += 1
-	
+    
         return
 
 
@@ -116,12 +116,12 @@ class Combine(object):
         nodey = self.nodey
         nodez = self.nodez
 
-        mynodex = 1 + (nodex-nprocx)/nprocx
-        mynodey = 1 + (nodey-nprocy)/nprocy
-        mynodez = 1 + (nodez-nprocz)/nprocz
+        mynodex = 1 + (nodex-nprocx)//nprocx
+        mynodey = 1 + (nodey-nprocy)//nprocy
+        mynodez = 1 + (nodez-nprocz)//nprocz
 
         if not len(data) == mynodex * mynodey * mynodez:
-            raise ValueError, "incorrect data size"
+            raise ValueError("incorrect data size")
 
 
         mynxs = (mynodex - 0) * mylocx
@@ -141,11 +141,12 @@ class Combine(object):
 
 
     def write(self, filename):
-        fp = file(filename, 'w')
+        fp = open(filename, 'w')
         header = '%d x %d x %d\n' % (self.nodex, self.nodey, self.nodez)
         #print header
         fp.write(header)
-	fp.writelines(self.saved)
+        fp.writelines(self.saved)
+        fp.close()
         return
 
 
@@ -161,21 +162,21 @@ def combine(prefix, opts, step, nodex, nodey, nodez,
         cb = Combine(nodex, nodey, nodez, nprocx, nprocy, nprocz)
         for n in range(i * nproc_per_cap, (i+1) * nproc_per_cap):
             filename = '%s.%s.%d.%d.pasted' % (prefix, opts, n, step)
-            print 'reading', filename
+            print('reading ' + filename)
             data = cb.readData(filename, 0)
-	    if opts == 'heating':
-		cb.join_EL(data, n)
-	    else:
-            	cb.join(data, n)
+            if opts == 'heating':
+                cb.join_EL(data, n)
+            else:
+                cb.join(data, n)
 
         if opts == 'coord,velo,visc':
             filename = '%s.cap%02d.%d' % (prefix, i, step)
-	elif opts == 'heating':
-	    filename = '%s.ele%02d.%d' % (prefix, i, step)
+        elif opts == 'heating':
+            filename = '%s.ele%02d.%d' % (prefix, i, step)
         else:
             filename = '%s.opt%02d.%d' % (prefix, i, step)
 
-        print 'writing', filename
+        print('writing ' + filename)
         cb.write(filename)
         combined_files.append(filename)
 
@@ -187,7 +188,7 @@ if __name__ == '__main__':
     import sys
 
     if not len(sys.argv) == 10:
-        print __doc__
+        print(__doc__)
         sys.exit(1)
 
     prefix = sys.argv[1]

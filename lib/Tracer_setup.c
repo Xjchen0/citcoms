@@ -42,6 +42,7 @@
 #include <math.h>
 #include <string.h>
 #include "global_defs.h"
+#include "checkpoints.h"
 #include "parsing.h"
 #include "parallel_related.h"
 #include "composition_related.h"
@@ -1215,6 +1216,14 @@ static void read_old_tracer_file(struct All_variables *E)
     void sphere_to_cart();
 
     FILE *fp1;
+
+    /* First attempt: read tracers directly from binary checkpoint (.chkpt) */
+    sprintf(output_file, "%s.chkpt.%d.%d", E->control.old_P_file, E->parallel.me, E->monitor.solution_cycles_init);
+    if (read_tracers_from_checkpoint(E, output_file)) {
+        if (E->parallel.me == 0)
+            fprintf(stderr, "Read old tracers from checkpoint %s\n", output_file);
+        return;
+    }
 
     if (E->trace.number_of_extra_quantities>99) {
         fprintf(E->trace.fpt,"ERROR(read_old_tracer_file)-increase size of extra[]\n");

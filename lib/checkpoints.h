@@ -29,3 +29,7 @@
 
 void output_checkpoint(struct All_variables *E);
 void read_checkpoint(struct All_variables *E);
+
+int get_checkpoint_elapsed_time(struct All_variables *E, const char *output_file, float *elapsed_time);
+int read_tic_from_checkpoint(struct All_variables *E, const char *output_file);
+int read_tracers_from_checkpoint(struct All_variables *E, const char *output_file);

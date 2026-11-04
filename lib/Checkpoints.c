@@ -519,3 +519,171 @@ static void read_momentum_checkpoint(struct All_variables *E, FILE *fp)
 }
 
 
+/*=======================================================================
+  Functions for two-stage continuation reading directly from binary .chkpt
+=========================================================================*/
+
+int get_checkpoint_elapsed_time(struct All_variables *E, const char *output_file, float *elapsed_time)
+{
+    FILE *fp;
+    int tmp[7];
+    int cycles;
+    float time;
+
+    fp = fopen(output_file, "rb");
+    if (fp == NULL)
+        return 0;
+
+    if (fread(tmp, sizeof(int), 7, fp) != 7) {
+        fclose(fp);
+        return 0;
+    }
+
+    if (fread(&cycles, sizeof(int), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+
+    if (fread(&time, sizeof(float), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+
+    *elapsed_time = time;
+    fclose(fp);
+    return 1;
+}
+
+
+int read_tic_from_checkpoint(struct All_variables *E, const char *output_file)
+{
+    FILE *fp;
+    int tmp[7];
+    int m;
+
+    fp = fopen(output_file, "rb");
+    if (fp == NULL)
+        return 0;
+
+    /* read & check mesh parameters */
+    if (fread(tmp, sizeof(int), 7, fp) != 7) {
+        fclose(fp);
+        return 0;
+    }
+
+    if((tmp[0] != E->lmesh.nox) ||
+       (tmp[1] != E->lmesh.noy) ||
+       (tmp[2] != E->lmesh.noz) ||
+       (tmp[3] != E->parallel.nprocx) ||
+       (tmp[4] != E->parallel.nprocy) ||
+       (tmp[5] != E->parallel.nprocz) ||
+       (tmp[6] != E->sphere.caps_per_proc)) {
+        fprintf(stderr, "Error in reading checkpoint file: mesh parameters mismatch, me=%d\n",
+                E->parallel.me);
+        fprintf(stderr, "Expected: %d %d %d %d %d %d %d\n",
+                E->lmesh.nox, E->lmesh.noy, E->lmesh.noz,
+                E->parallel.nprocx, E->parallel.nprocy, E->parallel.nprocz,
+                E->sphere.caps_per_proc);
+        fprintf(stderr, "Found:    %d %d %d %d %d %d %d\n",
+                tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
+        fclose(fp);
+        myerror(E, "read_tic_from_checkpoint: mesh mismatch");
+    }
+
+    /* skip timing info: 1 int + 3 floats */
+    if (fseek(fp, sizeof(int) + 3 * sizeof(float), SEEK_CUR) != 0) {
+        fclose(fp);
+        myerror(E, "read_tic_from_checkpoint: seek timing error");
+    }
+
+    /* read sentinel for energy */
+    read_sentinel(fp, E->parallel.me);
+
+    /* read T for each cap, skip Tdot */
+    for(m = 1; m <= E->sphere.caps_per_proc; m++) {
+        if(fread(E->T[m], sizeof(double), E->lmesh.nno + 1, fp) != E->lmesh.nno + 1) {
+            fclose(fp);
+            myerror(E, "read_tic_from_checkpoint: error reading T");
+        }
+        if(fseek(fp, (long)(E->lmesh.nno + 1) * sizeof(double), SEEK_CUR) != 0) {
+            fclose(fp);
+            myerror(E, "read_tic_from_checkpoint: error seeking past Tdot");
+        }
+    }
+
+    fclose(fp);
+    return 1;
+}
+
+
+int read_tracers_from_checkpoint(struct All_variables *E, const char *output_file)
+{
+    FILE *fp;
+    int tmp[7];
+    int check_sentinel[4];
+    long offset;
+
+    fp = fopen(output_file, "rb");
+    if (fp == NULL)
+        return 0;
+
+    /* read & check mesh parameters */
+    if (fread(tmp, sizeof(int), 7, fp) != 7) {
+        fclose(fp);
+        return 0;
+    }
+
+    if((tmp[0] != E->lmesh.nox) ||
+       (tmp[1] != E->lmesh.noy) ||
+       (tmp[2] != E->lmesh.noz) ||
+       (tmp[3] != E->parallel.nprocx) ||
+       (tmp[4] != E->parallel.nprocy) ||
+       (tmp[5] != E->parallel.nprocz) ||
+       (tmp[6] != E->sphere.caps_per_proc)) {
+        fprintf(stderr, "Error reading checkpoint tracers: mesh mismatch, me=%d\n", E->parallel.me);
+        fclose(fp);
+        myerror(E, "read_tracers_from_checkpoint: mesh mismatch");
+    }
+
+    /* skip timing info: 1 int + 3 floats */
+    if (fseek(fp, sizeof(int) + 3 * sizeof(float), SEEK_CUR) != 0) {
+        fclose(fp);
+        myerror(E, "read_tracers_from_checkpoint: seek timing error");
+    }
+
+    /* skip energy checkpoint: sentinel + 2 * (nno+1) doubles per cap */
+    read_sentinel(fp, E->parallel.me);
+    offset = (long)E->sphere.caps_per_proc * 2 * (E->lmesh.nno + 1) * sizeof(double);
+    if (fseek(fp, offset, SEEK_CUR) != 0) {
+        fclose(fp);
+        myerror(E, "read_tracers_from_checkpoint: seek energy error");
+    }
+
+    /* skip momentum checkpoint: sentinel + 2 floats + ((npno+1) + neq) doubles per cap */
+    read_sentinel(fp, E->parallel.me);
+    offset = 2 * sizeof(float) + (long)E->sphere.caps_per_proc * ((E->lmesh.npno + 1) + E->lmesh.neq) * sizeof(double);
+    if (fseek(fp, offset, SEEK_CUR) != 0) {
+        fclose(fp);
+        myerror(E, "read_tracers_from_checkpoint: seek momentum error");
+    }
+
+    /* verify tracer section exists (sentinel check preview) */
+    if (fread(check_sentinel, sizeof(int), 4, fp) != 4) {
+        fclose(fp);
+        return 0;
+    }
+    fseek(fp, -4 * (long)sizeof(int), SEEK_CUR);
+
+    /* read tracer checkpoint */
+    if (E->trace.ic_method_for_flavors == 99) {
+        if (E->parallel.me == 0)
+            fprintf(stderr, "ic_method_for_flavors = 99 will override checkpoint restart\n");
+    } else {
+        read_tracer_checkpoint(E, fp);
+        if (E->composition.on)
+            read_composition_checkpoint(E, fp);
+    }
+
+    fclose(fp);
+    return 1;
+}

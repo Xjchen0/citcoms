@@ -733,7 +733,7 @@ void h5output_surf_botm_coord(struct All_variables *E)
 
     int i, j, k;
     int n, nx, ny, nz;
-    int m, mx, my;
+    int m, mx, my, p;
 
     int pz = E->parallel.me_loc[3];
     int nprocz = E->parallel.nprocz;
@@ -866,9 +866,9 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
         {
             for(j = 0; j < my; j++)
             {
-                n = k + i*nz + j*nz*nx;
+                p = 1 + i + j*nx;
                 m = j + i*my;
-                scalar->data[m] = E->slice.shflux[1][n+1];
+                scalar->data[m] = E->slice.shflux[1][p];
             }
         }
 
@@ -887,9 +887,9 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
         {
             for(j = 0; j < my; j++)
             {
-                n = k + i*nz + j*nz*nx;
+                p = 1 + i + j*nx;
                 m = j + i*my;
-                scalar->data[m] = topo[i];
+                scalar->data[m] = topo[p];
             }
         }
         dataset = H5Dopen(file_id, "/surf/topography");
@@ -936,9 +936,9 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
         {
             for(j = 0; j < my; j++)
             {
-                n = k + i*nz + j*nz*nx;
+                p = 1 + i + j*nx;
                 m = j + i*my;
-                scalar->data[m] = E->slice.bhflux[1][n+1];
+                scalar->data[m] = E->slice.bhflux[1][p];
             }
         }
         dataset = H5Dopen(file_id, "/botm/heatflux");
@@ -946,14 +946,14 @@ void h5output_surf_botm(struct All_variables *E, int cycles)
         status = H5Dclose(dataset);
 
         /* topography data */
-        topo = E->slice.tpg[1];
+        topo = E->slice.tpgb[1];
         for(i = 0; i < mx; i++)
         {
             for(j = 0; j < my; j++)
             {
-                n = k + i*nz + j*nz*nx;
+                p = 1 + i + j*nx;
                 m = j + i*my;
-                scalar->data[m] = topo[i];
+                scalar->data[m] = topo[p];
             }
         }
         dataset = H5Dopen(file_id, "/botm/topography");
@@ -2416,6 +2416,27 @@ herr_t set_attribute_double_vector(hid_t obj_id,
                                    const double *data)
 {
     return set_attribute_array(obj_id, attr_name, 1, &dim, H5T_NATIVE_DOUBLE, data);
+}
+
+#else   /* #ifdef USE_HDF5 */
+
+#include <stdio.h>
+#include "parallel_related.h"
+
+void h5output_allocate_memory(struct All_variables *E)
+{
+}
+
+void h5input_params(struct All_variables *E)
+{
+}
+
+void h5output(struct All_variables *E, int cycles)
+{
+    if (E->parallel.me == 0) {
+        fprintf(stderr, "Error: HDF5 output requested but CitcomS was compiled without HDF5 support.\n");
+    }
+    parallel_process_termination();
 }
 
 #endif  /* #ifdef USE_HDF5 */

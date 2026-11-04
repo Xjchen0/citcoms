@@ -73,7 +73,10 @@ void output_common_input(struct All_variables *E)
     int m = E->parallel.me;
 
     input_string("output_format", E->output.format, "ascii",m);
-    input_string("output_optional", E->output.optional, "surf,botm,tracer",m);
+    input_string("output_optional", E->output.optional, "horiz_avg",m);
+    input_string("output_optional_ascii", E->output.optional_ascii, "horiz_avg",m);
+    input_string("output_optional_vtk", E->output.optional_vtk, "",m);
+    input_string("output_optional_h5", E->output.optional_h5, "surf,botm,horiz_avg",m);
 
     /* gzdir type of I/O */
     E->output.gzdir.vtk_io = 0;
@@ -94,7 +97,8 @@ void output_common_input(struct All_variables *E)
       //      E->output.gzdir.vtk_io,E->output.gzdir.vtk_base_save);
     }
 
-    if(strcmp(E->output.format, "vtk") == 0) {
+    if(strcmp(E->output.format, "vtk") == 0 ||
+       strcmp(E->output.format, "ascii,vtk") == 0) {
         input_string("vtk_format", E->output.vtk_format, "ascii",m);
         if (strcmp(E->output.vtk_format, "binary") != 0 &&
             strcmp(E->output.vtk_format, "ascii") != 0) {

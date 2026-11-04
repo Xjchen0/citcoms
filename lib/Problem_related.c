@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "checkpoints.h"
 
 #ifdef USE_GZDIR
 int open_file_zipped(char *, FILE **,struct All_variables *);
@@ -91,10 +92,19 @@ void get_initial_elapsed_time(E)
     FILE *fp;
     int ll, mm,rezip;
     char output_file[255],input_s[1000];
+    float chkpt_time = 0.0;
 
     E->monitor.elapsed_time = 0.0;
 
     if (E->convection.tic_method == -1) {
+      /* First attempt: read elapsed_time from binary checkpoint */
+      sprintf(output_file, "%s.chkpt.%d.%d", E->control.old_P_file, E->parallel.me, E->monitor.solution_cycles_init);
+      if (get_checkpoint_elapsed_time(E, output_file, &chkpt_time)) {
+        E->monitor.elapsed_time = (double)chkpt_time;
+        if (E->parallel.me == 0)
+          fprintf(stderr, "Read initial elapsed_time (%g) from checkpoint %s\n", E->monitor.elapsed_time, output_file);
+        return;
+      }
 
 #ifdef USE_GZDIR		/* gzdir output */
       if(strcmp(E->output.format, "ascii-gz") == 0){

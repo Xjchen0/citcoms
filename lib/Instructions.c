@@ -1201,7 +1201,8 @@ void allocate_common_vars(E)
 
   }         /* end for cap j  */
 
-  if (strcmp(E->output.format, "hdf5") == 0)
+  if (strcmp(E->output.format, "hdf5") == 0 ||
+      strcmp(E->output.format, "ascii,hdf5") == 0)
       h5output_allocate_memory(E);
 
   return;
@@ -1615,17 +1616,17 @@ void open_qfiles(struct All_variables *E) /* additional heat
 }
 
 
-static void output_parse_optional(struct  All_variables *E)
+static void output_parse_optional(struct  All_variables *E, const char *opt_str)
 {
     char* strip(char*);
 
-    int pos, len;
+    char buf[1000];
     char *prev, *next;
 
-    len = strlen(E->output.optional);
-    /* fprintf(stderr, "### length of optional is %d\n", len); */
-    pos = 0;
-    next = E->output.optional;
+    if (!opt_str) return;
+    strncpy(buf, opt_str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    next = buf;
 
     E->output.connectivity = 0;
     E->output.stress = 0;
@@ -1825,6 +1826,32 @@ void mkdatadir(const char *dir)
 }
 
 
+static void dual_output_ascii_h5(struct All_variables *E, int cycles)
+{
+    const char *opt_ascii = E->output.optional_ascii[0] ? E->output.optional_ascii : E->output.optional;
+    const char *opt_h5 = E->output.optional_h5[0] ? E->output.optional_h5 : E->output.optional;
+
+    output_parse_optional(E, opt_ascii);
+    output(E, cycles);
+
+    output_parse_optional(E, opt_h5);
+    h5output(E, cycles);
+}
+
+
+static void dual_output_ascii_vtk(struct All_variables *E, int cycles)
+{
+    const char *opt_ascii = E->output.optional_ascii[0] ? E->output.optional_ascii : E->output.optional;
+    const char *opt_vtk = E->output.optional_vtk;
+
+    output_parse_optional(E, opt_ascii);
+    output(E, cycles);
+
+    output_parse_optional(E, opt_vtk);
+    vtk_output(E, cycles);
+}
+
+
 void output_init(struct  All_variables *E)
 {
     chk_prefix(E);
@@ -1852,14 +1879,18 @@ void output_init(struct  All_variables *E)
         E->problem_output = h5output;
     else if (strcmp(E->output.format, "vtk") == 0)
         E->problem_output = vtk_output;
+    else if (strcmp(E->output.format, "ascii,hdf5") == 0)
+        E->problem_output = dual_output_ascii_h5;
+    else if (strcmp(E->output.format, "ascii,vtk") == 0)
+        E->problem_output = dual_output_ascii_vtk;
 #ifdef USE_GZDIR
     else if (strcmp(E->output.format, "ascii-gz") == 0)
         E->problem_output = gzdir_output;
     else {
         /* indicate error here */
         if (E->parallel.me == 0) {
-            fprintf(stderr, "wrong output_format, must be 'ascii', 'hdf5', 'ascii-gz' or 'vtk'\n");
-            fprintf(E->fp, "wrong output_format, must be  'ascii', 'hdf5' 'ascii-gz', or 'vtk'\n");
+            fprintf(stderr, "wrong output_format, must be 'ascii', 'hdf5', 'vtk', 'ascii,hdf5', 'ascii,vtk' or 'ascii-gz'\n");
+            fprintf(E->fp, "wrong output_format, must be 'ascii', 'hdf5', 'vtk', 'ascii,hdf5', 'ascii,vtk' or 'ascii-gz'\n");
         }
         parallel_process_termination();
     }
@@ -1867,14 +1898,31 @@ void output_init(struct  All_variables *E)
     else {
         /* indicate error here */
         if (E->parallel.me == 0) {
-            fprintf(stderr, "wrong output_format, must be 'ascii', 'hdf5', or 'vtk' (USE_GZDIR undefined)\n");
-            fprintf(E->fp, "wrong output_format, must be 'ascii', 'hdf5', or 'vtk' (USE_GZDIR undefined)\n");
+            fprintf(stderr, "wrong output_format, must be 'ascii', 'hdf5', 'vtk', 'ascii,hdf5' or 'ascii,vtk' (USE_GZDIR undefined)\n");
+            fprintf(E->fp, "wrong output_format, must be 'ascii', 'hdf5', 'vtk', 'ascii,hdf5' or 'ascii,vtk' (USE_GZDIR undefined)\n");
         }
         parallel_process_termination();
     }
 #endif
 
-    output_parse_optional(E);
+    /* Check for mutual exclusion between vtk and hdf5 */
+    if (strstr(E->output.format, "vtk") && strstr(E->output.format, "hdf5")) {
+        if (E->parallel.me == 0) {
+            fprintf(stderr, "Error: 'vtk' and 'hdf5' cannot be enabled simultaneously as both output full 3D volume fields.\n"
+                            "Please choose either 'ascii,vtk' or 'ascii,hdf5'.\n");
+            fprintf(E->fp, "Error: 'vtk' and 'hdf5' cannot be enabled simultaneously.\n");
+        }
+        parallel_process_termination();
+    }
+
+    if (strcmp(E->output.format, "vtk") == 0)
+        output_parse_optional(E, E->output.optional_vtk);
+    else if (strcmp(E->output.format, "hdf5") == 0)
+        output_parse_optional(E, E->output.optional_h5[0] ? E->output.optional_h5 : E->output.optional);
+    else if (strcmp(E->output.format, "ascii") == 0)
+        output_parse_optional(E, E->output.optional_ascii[0] ? E->output.optional_ascii : E->output.optional);
+    else
+        output_parse_optional(E, E->output.optional);
 }
 
 
