@@ -78,6 +78,7 @@ static void h5output_close(struct All_variables *);
 
 static void h5output_const(struct All_variables *E);
 static void h5output_timedep(struct All_variables *E, int cycles);
+static void h5output_write_xdmf(struct All_variables *E, int cycles);
 
 /* for creation of HDF5 objects (wrapped for compatibility with PyTables) */
 static hid_t h5create_file(const char *filename, unsigned flags, hid_t fcpl_id, hid_t fapl_id);
@@ -131,8 +132,6 @@ void h5output_geoid(struct All_variables *, int);
 void h5output_horiz_avg(struct All_variables *, int);
 void h5output_time(struct All_variables *, int);
 
-#endif
-
 extern void parallel_process_termination();
 extern void heat_flux(struct All_variables *);
 extern void get_STD_topo(struct All_variables *, float**, float**, float**, float**, int);
@@ -146,7 +145,6 @@ extern void compute_geoid(struct All_variables *);
 
 void h5output_allocate_memory(struct All_variables *E)
 {
-#ifdef USE_HDF5
     /*
      * Field variables
      */
@@ -207,8 +205,6 @@ void h5output_allocate_memory(struct All_variables *E)
     E->hdf5.scalar3d = scalar3d;
     E->hdf5.scalar2d = scalar2d;
     E->hdf5.scalar1d = scalar1d;
-
-#endif
 }
 
 
@@ -220,12 +216,6 @@ void h5output_allocate_memory(struct All_variables *E)
 
 void h5output(struct All_variables *E, int cycles)
 {
-#ifndef USE_HDF5
-    if(E->parallel.me == 0)
-        fprintf(stderr, "h5output(): CitcomS was compiled without HDF5!\n");
-    MPI_Finalize();
-    exit(8);
-#else
     if (cycles == 0) {
         h5output_const(E);
         output_domain(E);
@@ -234,7 +224,6 @@ void h5output(struct All_variables *E, int cycles)
             output_coord_bin(E);
     }
     h5output_timedep(E, cycles);
-#endif
 }
 
 
@@ -244,8 +233,6 @@ void h5output(struct All_variables *E, int cycles)
 
 void h5input_params(struct All_variables *E)
 {
-#ifdef USE_HDF5
-
     int m = E->parallel.me;
 
     /* TODO: use non-optimized defaults to avoid unnecessary failures */
@@ -261,12 +248,8 @@ void h5input_params(struct All_variables *E)
     input_int("cache_mdc_nelmts", &(E->output.cache_mdc_nelmts), "10330", m);
     input_int("cache_rdcc_nelmts", &(E->output.cache_rdcc_nelmts), "521", m);
     input_int("cache_rdcc_nbytes", &(E->output.cache_rdcc_nbytes), "1048576", m);
-
-#endif
 }
 
-
-#ifdef USE_HDF5
 
 static void h5output_const(struct All_variables *E)
 {
@@ -323,7 +306,231 @@ static void h5output_timedep(struct All_variables *E, int cycles)
       myerror(E,"horizontal strain-rate avg output only implemented for gzdir version");
     h5output_close(E);
 
+    if (E->parallel.me == 0) {
+        h5output_write_xdmf(E, cycles);
+    }
 }
+
+static void h5output_write_xdmf(struct All_variables *E, int cycles)
+{
+    FILE *fp_hist;
+    FILE *fp_xdmf;
+    char hist_file[512];
+    char xdmf_file[512];
+    char line[512];
+    char const_h5[512];
+    double time_val;
+    int max_entries = 10000;
+    int count = 0;
+    int i, c;
+    int *hist_cycles;
+    double *hist_times;
+    int caps = E->sphere.caps;
+    int nox = E->mesh.nox;
+    int noy = E->mesh.noy;
+    int noz = E->mesh.noz;
+
+    snprintf(const_h5, sizeof(const_h5), "%s.h5", E->control.data_prefix);
+
+    if (E->data.scalet > 0.0) {
+        time_val = (double)(E->monitor.elapsed_time * E->data.scalet);
+    } else {
+        time_val = (double)E->monitor.elapsed_time;
+    }
+
+    snprintf(hist_file, sizeof(hist_file), "%s.h5_history.txt", E->control.data_file);
+    snprintf(xdmf_file, sizeof(xdmf_file), "%s.xdmf", E->control.data_file);
+
+    hist_cycles = (int *)malloc(max_entries * sizeof(int));
+    hist_times = (double *)malloc(max_entries * sizeof(double));
+
+    if (!hist_cycles || !hist_times) {
+        if (hist_cycles) free(hist_cycles);
+        if (hist_times) free(hist_times);
+        return;
+    }
+
+    /* Read existing history and filter entries >= cycles (restart protection) */
+    fp_hist = fopen(hist_file, "r");
+    if (fp_hist) {
+        while (fgets(line, sizeof(line), fp_hist) && count < max_entries - 1) {
+            int cyc;
+            double t;
+            if (sscanf(line, "%d %lf", &cyc, &t) == 2) {
+                if (cyc < cycles) {
+                    hist_cycles[count] = cyc;
+                    hist_times[count] = t;
+                    count++;
+                }
+            }
+        }
+        fclose(fp_hist);
+    }
+
+    /* Add current step */
+    if (count < max_entries) {
+        hist_cycles[count] = cycles;
+        hist_times[count] = time_val;
+        count++;
+    }
+
+    /* Rewrite history file */
+    fp_hist = fopen(hist_file, "w");
+    if (fp_hist) {
+        for (i = 0; i < count; i++) {
+            fprintf(fp_hist, "%d %.8e\n", hist_cycles[i], hist_times[i]);
+        }
+        fclose(fp_hist);
+    }
+
+    /* Write XDMF collection file */
+    fp_xdmf = fopen(xdmf_file, "w");
+    if (fp_xdmf) {
+        fprintf(fp_xdmf, "<?xml version=\"1.0\" ?>\n");
+        fprintf(fp_xdmf, "<!DOCTYPE Xdmf SYSTEM \"Xdmf.dtd\" []>\n");
+        fprintf(fp_xdmf, "<Xdmf Version=\"2.0\">\n");
+        fprintf(fp_xdmf, "  <Domain>\n");
+        fprintf(fp_xdmf, "    <Grid Name=\"TimeSeries\" GridType=\"Collection\" CollectionType=\"Temporal\">\n");
+
+        for (i = 0; i < count; i++) {
+            int cyc = hist_cycles[i];
+            double t = hist_times[i];
+
+            if (caps > 1) {
+                fprintf(fp_xdmf, "      <Grid Name=\"Step_%d\" GridType=\"Collection\" CollectionType=\"Spatial\">\n", cyc);
+            } else {
+                fprintf(fp_xdmf, "      <Grid Name=\"Step_%d\" GridType=\"Uniform\">\n", cyc);
+            }
+            fprintf(fp_xdmf, "        <Time Value=\"%.6g\"/>\n", t);
+
+            for (c = 0; c < caps; c++) {
+                if (caps > 1) {
+                    fprintf(fp_xdmf, "        <Grid Name=\"Cap_%d\" GridType=\"Uniform\">\n", c);
+                }
+
+                /* Topology: 3D Structured Mesh */
+                fprintf(fp_xdmf, "          <Topology TopologyType=\"3DSMesh\" Dimensions=\"%d %d %d\"/>\n",
+                        nox, noy, noz);
+
+                /* Geometry: Cartesian coordinates via HyperSlab */
+                fprintf(fp_xdmf, "          <Geometry GeometryType=\"XYZ\">\n");
+                fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d 3\" Type=\"HyperSlab\">\n",
+                        nox, noy, noz);
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 5\" Format=\"XML\">\n");
+                fprintf(fp_xdmf, "                %d 0 0 0 0\n", c);
+                fprintf(fp_xdmf, "                1 1 1 1 1\n");
+                fprintf(fp_xdmf, "                1 %d %d %d 3\n", nox, noy, noz);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d 3\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                        caps, nox, noy, noz);
+                fprintf(fp_xdmf, "                %s:/coord\n", const_h5);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "            </DataItem>\n");
+                fprintf(fp_xdmf, "          </Geometry>\n");
+
+                /* Attribute: Temperature */
+                fprintf(fp_xdmf, "          <Attribute Name=\"temperature\" AttributeType=\"Scalar\" Center=\"Node\">\n");
+                fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d\" Type=\"HyperSlab\">\n",
+                        nox, noy, noz);
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 4\" Format=\"XML\">\n");
+                fprintf(fp_xdmf, "                %d 0 0 0\n", c);
+                fprintf(fp_xdmf, "                1 1 1 1\n");
+                fprintf(fp_xdmf, "                1 %d %d %d\n", nox, noy, noz);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                        caps, nox, noy, noz);
+                fprintf(fp_xdmf, "                %s.%d.h5:/temperature\n", E->control.data_prefix, cyc);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "            </DataItem>\n");
+                fprintf(fp_xdmf, "          </Attribute>\n");
+
+                /* Attribute: Velocity */
+                fprintf(fp_xdmf, "          <Attribute Name=\"velocity\" AttributeType=\"Vector\" Center=\"Node\">\n");
+                fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d 3\" Type=\"HyperSlab\">\n",
+                        nox, noy, noz);
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 5\" Format=\"XML\">\n");
+                fprintf(fp_xdmf, "                %d 0 0 0 0\n", c);
+                fprintf(fp_xdmf, "                1 1 1 1 1\n");
+                fprintf(fp_xdmf, "                1 %d %d %d 3\n", nox, noy, noz);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d 3\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                        caps, nox, noy, noz);
+                fprintf(fp_xdmf, "                %s.%d.h5:/velocity\n", E->control.data_prefix, cyc);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "            </DataItem>\n");
+                fprintf(fp_xdmf, "          </Attribute>\n");
+
+                /* Attribute: Viscosity */
+                fprintf(fp_xdmf, "          <Attribute Name=\"viscosity\" AttributeType=\"Scalar\" Center=\"Node\">\n");
+                fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d\" Type=\"HyperSlab\">\n",
+                        nox, noy, noz);
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 4\" Format=\"XML\">\n");
+                fprintf(fp_xdmf, "                %d 0 0 0\n", c);
+                fprintf(fp_xdmf, "                1 1 1 1\n");
+                fprintf(fp_xdmf, "                1 %d %d %d\n", nox, noy, noz);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                        caps, nox, noy, noz);
+                fprintf(fp_xdmf, "                %s.%d.h5:/viscosity\n", E->control.data_prefix, cyc);
+                fprintf(fp_xdmf, "              </DataItem>\n");
+                fprintf(fp_xdmf, "            </DataItem>\n");
+                fprintf(fp_xdmf, "          </Attribute>\n");
+
+                /* Optional Attribute: Pressure */
+                if (E->output.pressure) {
+                    fprintf(fp_xdmf, "          <Attribute Name=\"pressure\" AttributeType=\"Scalar\" Center=\"Node\">\n");
+                    fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d\" Type=\"HyperSlab\">\n",
+                            nox, noy, noz);
+                    fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 4\" Format=\"XML\">\n");
+                    fprintf(fp_xdmf, "                %d 0 0 0\n", c);
+                    fprintf(fp_xdmf, "                1 1 1 1\n");
+                    fprintf(fp_xdmf, "                1 %d %d %d\n", nox, noy, noz);
+                    fprintf(fp_xdmf, "              </DataItem>\n");
+                    fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                            caps, nox, noy, noz);
+                    fprintf(fp_xdmf, "                %s.%d.h5:/pressure\n", E->control.data_prefix, cyc);
+                    fprintf(fp_xdmf, "              </DataItem>\n");
+                    fprintf(fp_xdmf, "            </DataItem>\n");
+                    fprintf(fp_xdmf, "          </Attribute>\n");
+                }
+
+                /* Optional Attribute: Stress */
+                if (E->output.stress) {
+                    fprintf(fp_xdmf, "          <Attribute Name=\"stress\" AttributeType=\"Tensor6\" Center=\"Node\">\n");
+                    fprintf(fp_xdmf, "            <DataItem ItemType=\"HyperSlab\" Dimensions=\"%d %d %d 6\" Type=\"HyperSlab\">\n",
+                            nox, noy, noz);
+                    fprintf(fp_xdmf, "              <DataItem Dimensions=\"3 5\" Format=\"XML\">\n");
+                    fprintf(fp_xdmf, "                %d 0 0 0 0\n", c);
+                    fprintf(fp_xdmf, "                1 1 1 1 1\n");
+                    fprintf(fp_xdmf, "                1 %d %d %d 6\n", nox, noy, noz);
+                    fprintf(fp_xdmf, "              </DataItem>\n");
+                    fprintf(fp_xdmf, "              <DataItem Dimensions=\"%d %d %d %d 6\" NumberType=\"Float\" Precision=\"4\" Format=\"HDF\">\n",
+                            caps, nox, noy, noz);
+                    fprintf(fp_xdmf, "                %s.%d.h5:/stress\n", E->control.data_prefix, cyc);
+                    fprintf(fp_xdmf, "              </DataItem>\n");
+                    fprintf(fp_xdmf, "            </DataItem>\n");
+                    fprintf(fp_xdmf, "          </Attribute>\n");
+                }
+
+                if (caps > 1) {
+                    fprintf(fp_xdmf, "        </Grid>\n");
+                }
+            }
+
+            fprintf(fp_xdmf, "      </Grid>\n");
+        }
+
+        fprintf(fp_xdmf, "    </Grid>\n");
+        fprintf(fp_xdmf, "  </Domain>\n");
+        fprintf(fp_xdmf, "</Xdmf>\n");
+
+        fclose(fp_xdmf);
+    }
+
+    free(hist_cycles);
+    free(hist_times);
+}
+
 
 
 /****************************************************************************

@@ -48,6 +48,10 @@ doc/citcoms-manual.synctex.gz
 
 visual/OpenDXMacro/Makefile.in
 
+# python bytecode and cache
+__pycache__/
+*.pyc
+
 visual/OpenDXMacro/Makefile
 
 config.h.in~
@@ -55,3 +59,7 @@ config.h.in~
 visual/OpenDXMacro/Makefile
 
 visual/OpenDXMacro/Makefile.in
+
+# python bytecode and cache
+__pycache__/
+*.pyc

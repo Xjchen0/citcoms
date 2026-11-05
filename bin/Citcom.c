@@ -67,6 +67,8 @@ int main(argc,argv)
 
   int cpu_total_seconds,k,need_init_sol;
   double CPU_time0(),time,initial_time,start_time;
+  int last_saved_checkpoint_cycle;
+  int do_field_output, do_checkpoint;
 
   struct All_variables *E;
   MPI_Comm world;
@@ -180,6 +182,9 @@ int main(argc,argv)
   /* information about simulation time and wall clock time */
   output_time(E, E->monitor.solution_cycles);
 
+  E->control.last_checkpoint_walltime = CPU_time0();
+  last_saved_checkpoint_cycle = E->monitor.solution_cycles;
+
   if(!E->control.restart)	/* if we have not restarted, print new
 				   checkpoint, else leave as is to
 				   allow reusing directories */
@@ -230,19 +235,47 @@ int main(argc,argv)
     if(E->output.write_q_files)
       if ((E->monitor.solution_cycles % E->output.write_q_files)==0)
 	heat_flux(E);
-    if ((E->monitor.solution_cycles % E->control.record_every)==0) {
+    /* 1. Field output triggering (Step-based or Model Time/Age-based) */
+    do_field_output = 0;
+    if (E->control.record_every > 0 && (E->monitor.solution_cycles % E->control.record_every) == 0) {
+        do_field_output = 1;
+    }
+    if (E->control.storage_interval_time > 0.0 &&
+        E->monitor.elapsed_time >= E->control.next_storage_time - 1.0e-4 * E->control.storage_interval_time) {
+        do_field_output = 1;
+        while (E->control.next_storage_time <= E->monitor.elapsed_time + 1.0e-4 * E->control.storage_interval_time) {
+            E->control.next_storage_time += E->control.storage_interval_time;
+        }
+    }
+    if (do_field_output) {
 	(E->problem_output)(E, E->monitor.solution_cycles);
     }
 
     /* information about simulation time and wall clock time */
     output_time(E, E->monitor.solution_cycles);
 
-    /* print checkpoint every checkpoint_frequency, unless we have restarted,
-       then, we would like to avoid overwriting 
-    */
-    if ( ((E->monitor.solution_cycles % E->control.checkpoint_frequency)==0) &&
-	 ((!E->control.restart) || (E->monitor.solution_cycles != E->monitor.solution_cycles_init))){
-	output_checkpoint(E);
+    /* 2. Checkpoint triggering (Step-based, Model Time/Age-based, or Wall-clock-based) */
+    do_checkpoint = 0;
+    if (E->control.checkpoint_frequency > 0 && (E->monitor.solution_cycles % E->control.checkpoint_frequency) == 0) {
+        do_checkpoint = 1;
+    }
+    if (E->control.checkpoint_interval_time > 0.0 &&
+        E->monitor.elapsed_time >= E->control.next_checkpoint_time - 1.0e-4 * E->control.checkpoint_interval_time) {
+        do_checkpoint = 1;
+        while (E->control.next_checkpoint_time <= E->monitor.elapsed_time + 1.0e-4 * E->control.checkpoint_interval_time) {
+            E->control.next_checkpoint_time += E->control.checkpoint_interval_time;
+        }
+    }
+    if (E->control.checkpoint_walltime > 0.0 &&
+        (CPU_time0() - E->control.last_checkpoint_walltime >= E->control.checkpoint_walltime)) {
+        do_checkpoint = 1;
+    }
+
+    if (do_checkpoint &&
+        ((!E->control.restart) || (E->monitor.solution_cycles != E->monitor.solution_cycles_init))) {
+        output_checkpoint(E);
+        E->control.last_checkpoint_walltime = CPU_time0();
+        last_saved_checkpoint_cycle = E->monitor.solution_cycles;
     }
     /* updating time-dependent material group
      * if mat_control is 0, the material group has already been
@@ -281,6 +314,16 @@ int main(argc,argv)
 
   }
 
+
+  /* Checkpoint on Termination */
+  if (E->control.checkpoint_on_termination) {
+    if (last_saved_checkpoint_cycle != E->monitor.solution_cycles) {
+      if (E->parallel.me == 0)
+        fprintf(stderr, "Checkpoint on termination: saving final checkpoint at cycle %d\n", E->monitor.solution_cycles);
+      output_checkpoint(E);
+      last_saved_checkpoint_cycle = E->monitor.solution_cycles;
+    }
+  }
 
   /* this section prints time accounting;
    * no counterpart in pyre */

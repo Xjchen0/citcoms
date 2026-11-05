@@ -40,6 +40,7 @@
 #include <ctype.h>
 #include "element_definitions.h"
 #include "global_defs.h"
+#include "checkpoints.h"
 
 #include "citcom_init.h"
 #include "initial_temperature.h"
@@ -417,7 +418,23 @@ void read_initial_settings(struct All_variables *E)
 
 
   /* restart from checkpoint file */
-  input_boolean("restart",&(E->control.restart),"off",m);
+  {
+      char restart_str[100];
+      input_string("restart", restart_str, "off", m);
+      if (strcasecmp(restart_str, "auto") == 0) {
+          E->control.auto_restart = 1;
+          E->control.restart = 0;
+      }
+      else if (strcasecmp(restart_str, "on") == 0 || strcasecmp(restart_str, "yes") == 0 ||
+               strcasecmp(restart_str, "1") == 0 || strcasecmp(restart_str, "true") == 0) {
+          E->control.restart = 1;
+          E->control.auto_restart = 0;
+      }
+      else {
+          E->control.restart = 0;
+          E->control.auto_restart = 0;
+      }
+  }
   input_int("post_p",&(E->control.post_p),"0",m);
   input_int("solution_cycles_init",&(E->monitor.solution_cycles_init),"0",m);
 
@@ -671,9 +688,32 @@ void read_initial_settings(struct All_variables *E)
   input_boolean("use_cbf_topo",&(E->control.use_cbf_topo),"off",m); /* make default on later XXX TWB */
 
 
-  input_int("storage_spacing",&(E->control.record_every),"10",m);
-  input_int("checkpointFrequency",&(E->control.checkpoint_frequency),"100",m);
-  input_int("cpu_limits_in_seconds",&(E->control.record_all_until),"5",m);
+  {
+      int explicit_storage_spacing, explicit_checkpoint_frequency;
+      explicit_storage_spacing = input_int("storage_spacing",&(E->control.record_every),"10",m);
+      explicit_checkpoint_frequency = input_int("checkpointFrequency",&(E->control.checkpoint_frequency),"100",m);
+      input_int("cpu_limits_in_seconds",&(E->control.record_all_until),"5",m);
+
+      /* Output & Checkpoint Intervals */
+      input_float("storage_interval_myr", &(E->control.storage_interval_myr), "0.0", m);
+      input_float("storage_interval_time", &(E->control.storage_interval_time), "0.0", m);
+      input_boolean("exact_time_output", &(E->control.exact_time_output), "on", m);
+
+      input_float("checkpoint_interval_myr", &(E->control.checkpoint_interval_myr), "0.0", m);
+      input_float("checkpoint_interval_time", &(E->control.checkpoint_interval_time), "0.0", m);
+      input_float("checkpoint_walltime", &(E->control.checkpoint_walltime), "0.0", m);
+
+      input_int("checkpoints_to_keep", &(E->control.checkpoints_to_keep), "3", m);
+      input_boolean("checkpoint_on_termination", &(E->control.checkpoint_on_termination), "on", m);
+
+      /* If user specified age/time-based intervals without explicitly specifying step spacing, disable step-based triggers */
+      if ((E->control.storage_interval_myr > 0.0 || E->control.storage_interval_time > 0.0) && !explicit_storage_spacing) {
+          E->control.record_every = 0;
+      }
+      if ((E->control.checkpoint_interval_myr > 0.0 || E->control.checkpoint_interval_time > 0.0 || E->control.checkpoint_walltime > 0.0) && !explicit_checkpoint_frequency) {
+          E->control.checkpoint_frequency = 0;
+      }
+  }
   input_int("write_q_files",&(E->output.write_q_files),"0",m);/* write additional
 								 heat flux files? */
   if(E->output.write_q_files){	/* make sure those get written at
@@ -946,6 +986,26 @@ void global_derived_values(struct All_variables *E)
     /* cm/yr */
     E->data.scalev = (E->data.radius_km*1e3/E->data.therm_diff)/(100*365.25*24*3600);
     E->data.timedir = E->control.Atemp / fabs(E->control.Atemp);
+
+    /* Convert physical Myr intervals to dimensionless time intervals using scalet */
+    if (E->control.storage_interval_myr > 0.0) {
+        if (E->data.scalet > 0.0) {
+            E->control.storage_interval_time = E->control.storage_interval_myr / E->data.scalet;
+            if (E->parallel.me == 0)
+                fprintf(stderr, "Storage interval: %g Myr (dimensionless dt = %g)\n",
+                        E->control.storage_interval_myr, E->control.storage_interval_time);
+        }
+    }
+    if (E->control.checkpoint_interval_myr > 0.0) {
+        if (E->data.scalet > 0.0) {
+            E->control.checkpoint_interval_time = E->control.checkpoint_interval_myr / E->data.scalet;
+            if (E->parallel.me == 0)
+                fprintf(stderr, "Checkpoint interval: %g Myr (dimensionless dt = %g)\n",
+                        E->control.checkpoint_interval_myr, E->control.checkpoint_interval_time);
+        }
+    }
+
+    update_next_output_times(E);
 
 
     if(E->control.print_convergence && E->parallel.me==0) {
@@ -1645,6 +1705,9 @@ static void output_parse_optional(struct  All_variables *E, const char *opt_str)
     E->output.strain_el = 0; 
     E->output.heating = 0;
     E->output.viscy = 0; 
+    E->output.velo = 0;
+    E->output.visc = 0;
+    E->output.coord = 0;
 
     while(1) {
         /* get next field */
@@ -1665,6 +1728,27 @@ static void output_parse_optional(struct  All_variables *E, const char *opt_str)
         /* fprintf(stderr, "### %s: %s\n", prev, next); */
         if(strcmp(prev, "connectivity")==0)
             E->output.connectivity = 1;
+        else if(strcmp(prev, "velo")==0 || strcmp(prev, "velocity")==0)
+            E->output.velo = 1;
+        else if(strcmp(prev, "visc")==0 || strcmp(prev, "viscosity")==0)
+            E->output.visc = 1;
+        else if(strcmp(prev, "coord")==0 || strcmp(prev, "coordinate")==0)
+            E->output.coord = 1;
+        else if(strcmp(prev, "3d")==0 || strcmp(prev, "volume")==0) {
+            E->output.velo = 1;
+            E->output.visc = 1;
+            E->output.coord = 1;
+        }
+        else if(strcmp(prev, "all")==0) {
+            E->output.velo = 1;
+            E->output.visc = 1;
+            E->output.coord = 1;
+            E->output.surf = 1;
+            E->output.botm = 1;
+            E->output.horiz_avg = 1;
+            E->output.stress = 1;
+            E->output.pressure = 1;
+        }
         else if(strcmp(prev, "stress")==0)
             E->output.stress = 1;
         else if(strcmp(prev, "pressure")==0)
@@ -1859,6 +1943,20 @@ void output_init(struct  All_variables *E)
     mkdatadir(E->control.data_dir);
     snprintf(E->control.data_file, 200, "%s/%s", E->control.data_dir,
 	     E->control.data_prefix);
+
+    if (E->control.auto_restart) {
+        if (strcmp(E->control.data_prefix_old, "initialize") == 0 || E->control.data_prefix_old[0] == '\0') {
+            strncpy(E->control.data_prefix_old, E->control.data_prefix, sizeof(E->control.data_prefix_old) - 1);
+        }
+        if (strcmp(E->control.data_dir_old, ".") == 0 && strcmp(E->control.data_dir, ".") != 0) {
+            strncpy(E->control.data_dir_old, E->control.data_dir, sizeof(E->control.data_dir_old) - 1);
+        }
+        expand_datadir(E, E->control.data_dir_old);
+        snprintf(E->control.old_P_file, 200, "%s/%s", E->control.data_dir_old,
+                 E->control.data_prefix_old);
+
+        determine_auto_restart_checkpoint(E);
+    }
 
     if (E->control.restart || E->control.post_p ||
         (E->convection.tic_method == -1) ||

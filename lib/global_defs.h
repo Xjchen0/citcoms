@@ -563,6 +563,23 @@ struct CONTROL {
     int record_every;
     int record_all_until;
 
+    /* Output & Checkpoint Intervals */
+    float storage_interval_myr;      /* Geological age output interval (Myr) */
+    float storage_interval_time;     /* Non-dimensional time output interval */
+    double next_storage_time;        /* Next non-dimensional output time */
+    int exact_time_output;           /* Snapping: adjust dt to land exactly on target time */
+
+    float checkpoint_interval_myr;   /* Checkpoint geological age interval (Myr) */
+    float checkpoint_interval_time;  /* Checkpoint non-dimensional time interval */
+    double next_checkpoint_time;     /* Next non-dimensional checkpoint time */
+    float checkpoint_walltime;       /* Wall-clock checkpoint interval (seconds) */
+    double last_checkpoint_walltime; /* Last wall-clock time checkpoint was saved */
+
+    /* Sliding window pruning, crash safety & auto-restart */
+    int checkpoints_to_keep;         /* Number of recent checkpoints to keep (0=unlimited) */
+    int checkpoint_on_termination;   /* Force checkpoint right before program exit */
+    int auto_restart;                /* 1 if restart=auto was requested */
+
     int print_convergence;
     int sdepv_print_convergence;
 
@@ -675,6 +692,9 @@ struct Output {
     int strain_el;
     int heating;      /* whether to output heating terms at elements */
     int viscy; 	      /* whether to output yielding information */
+    int velo;         /* whether to output 3D velocity and temperature in ascii */
+    int visc;         /* whether to output 3D viscosity in ascii */
+    int coord;        /* whether to output coordinates in ascii */
 
 
   /* flags used by GZDIR */

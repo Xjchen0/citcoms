@@ -142,6 +142,7 @@ void PG_timestep(struct All_variables *E)
 void std_timestep(struct All_variables *E)
 {
     int i,d,n,nel,el,node,m;
+    double min_gap, gap;
 
     float global_fmin();
     void velo_from_element();
@@ -187,6 +188,24 @@ void std_timestep(struct All_variables *E)
 				 E->advection.diff_timestep);
 
     E->advection.timestep = global_fmin(E,adv_timestep);
+
+    /* Exact Time Step Snapping */
+    if (E->control.exact_time_output) {
+      min_gap = 1.0e20;
+      if (E->control.storage_interval_time > 0.0) {
+        gap = E->control.next_storage_time - E->monitor.elapsed_time;
+        if (gap > 1.0e-4 * E->control.storage_interval_time && gap < min_gap)
+          min_gap = gap;
+      }
+      if (E->control.checkpoint_interval_time > 0.0) {
+        gap = E->control.next_checkpoint_time - E->monitor.elapsed_time;
+        if (gap > 1.0e-4 * E->control.checkpoint_interval_time && gap < min_gap)
+          min_gap = gap;
+      }
+      if (min_gap < (double)E->advection.timestep) {
+        E->advection.timestep = (float)min_gap;
+      }
+    }
 
 /*     if (E->parallel.me==0) */
 /*       fprintf(stderr, "adv_timestep=%g diff_timestep=%g\n",adv_timestep,E->advection.diff_timestep); */

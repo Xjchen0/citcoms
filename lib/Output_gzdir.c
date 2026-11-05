@@ -167,12 +167,13 @@ void gzdir_output(struct All_variables *E, int out_cycles)
 
   /* output */
 
-  gzdir_output_velo_temp(E, out_cycles); /* don't move this around,
-					else new VTK output won't
-					work */
-  gzdir_output_visc(E, out_cycles);
+  if (E->output.velo)
+      gzdir_output_velo_temp(E, out_cycles);
+  if (E->output.visc)
+      gzdir_output_visc(E, out_cycles);
 #ifdef CITCOM_ALLOW_ANISOTROPIC_VISC
-  gzdir_output_avisc(E, out_cycles);
+  if (E->output.visc)
+      gzdir_output_avisc(E, out_cycles);
 #endif
 
   gzdir_output_surf_botm(E, out_cycles);
