@@ -18,6 +18,9 @@
  */
 
 
+#ifndef H5_USE_16_API
+#define H5_USE_16_API 1
+#endif
 #include "hdf5.h"
 
 

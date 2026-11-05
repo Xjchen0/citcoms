@@ -116,19 +116,24 @@ void output(struct All_variables *E, int cycles)
 {
    
   if (cycles == 0) {
-    output_coord(E);
-    output_domain(E);
-    /*output_mat(E);*/
+    if (E->output.coord || E->output.velo || E->output.visc) {
+      output_coord(E);
+      output_domain(E);
+      /*output_mat(E);*/
 
-    if (E->output.coord_bin)
-        output_coord_bin(E);
+      if (E->output.coord_bin)
+          output_coord_bin(E);
+    }
   }
 
 
-  output_velo(E, cycles);
-  output_visc(E, cycles);
+  if (E->output.velo)
+      output_velo(E, cycles);
+  if (E->output.visc)
+      output_visc(E, cycles);
 #ifdef CITCOM_ALLOW_ANISOTROPIC_VISC
-  output_avisc(E, cycles);
+  if (E->output.visc)
+      output_avisc(E, cycles);
 #endif
 
 

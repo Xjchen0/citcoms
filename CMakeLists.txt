@@ -21,7 +21,7 @@ if(ENABLE_HDF5)
     find_package(HDF5 COMPONENTS C)
     if(HDF5_FOUND)
         message(STATUS "HDF5 found. Enabling HDF5 output support.")
-        add_definitions(-DUSE_HDF5)
+        add_definitions(-DUSE_HDF5 -DH5_USE_16_API)
         include_directories(${HDF5_INCLUDE_DIRS})
     else()
         message(WARNING "HDF5 requested but not found.")
@@ -116,4 +116,10 @@ add_executable(citcoms_combine bin/citcoms_combine.cpp)
 if(OpenMP_FOUND)
     target_link_libraries(citcoms_combine PRIVATE OpenMP::OpenMP_CXX)
 endif()
+
+# Installation target
+install(TARGETS CitcomSRegional CitcomSFull Py2C citcoms_combine
+        RUNTIME DESTINATION bin)
+install(PROGRAMS bin/citcoms_h5_to_xdmf.py DESTINATION bin)
+
 

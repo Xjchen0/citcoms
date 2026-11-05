@@ -29,12 +29,14 @@
 #include <sys/file.h>
 #include <unistd.h>
 #include "global_defs.h"
+#include "checkpoints.h"
 #include "composition_related.h"
 
 /* Private function prototypes */
 static void backup_file(const char *output_file);
 static void write_sentinel(FILE *fp);
 static void read_sentinel(FILE *fp, int me);
+static void prune_old_checkpoints(struct All_variables *E, int current_cycle);
 
 static void general_checkpoint(struct All_variables *E, FILE *fp);
 static void tracer_checkpoint(struct All_variables *E, FILE *fp);
@@ -52,6 +54,7 @@ void myerror(struct All_variables *E, const char *message);
 
 void output_checkpoint(struct All_variables *E)
 {
+    void parallel_process_sync(struct All_variables *E);
     char output_file[255];
     FILE *fp1;
 
@@ -62,6 +65,10 @@ void output_checkpoint(struct All_variables *E)
     /* backup_file(output_file); */
 
     fp1 = fopen(output_file, "wb");
+    if (fp1 == NULL) {
+        fprintf(stderr, "Error: cannot open checkpoint file %s for writing, me=%d\n", output_file, E->parallel.me);
+        parallel_process_termination();
+    }
 
     /* checkpoint for general information */
     /* this must be the first to be checkpointed */
@@ -82,6 +89,31 @@ void output_checkpoint(struct All_variables *E)
     }
 
     fclose(fp1);
+
+    /* Two-phase commit: wait for all MPI processes to finish writing their checkpoint */
+    parallel_process_sync(E);
+
+    /* Rank 0 updates last_good_checkpoint and prunes old checkpoints */
+    if (E->parallel.me == 0) {
+        char good_file[255];
+        FILE *fp_good;
+
+        sprintf(good_file, "%s.last_good_checkpoint", E->control.data_file);
+        fp_good = fopen(good_file, "w");
+        if (fp_good != NULL) {
+            fprintf(fp_good, "cycle %d\n", E->monitor.solution_cycles);
+            fprintf(fp_good, "elapsed_time %.12e\n", (double)E->monitor.elapsed_time);
+            fprintf(fp_good, "timestep %.12e\n", (double)E->advection.timestep);
+            fprintf(fp_good, "nprocs %d\n", E->parallel.nproc);
+            fclose(fp_good);
+        }
+
+        if (E->control.checkpoints_to_keep > 0) {
+            prune_old_checkpoints(E, E->monitor.solution_cycles);
+        }
+    }
+
+    parallel_process_sync(E);
     return;
 }
 
@@ -133,6 +165,9 @@ void read_checkpoint(struct All_variables *E)
 
     /* finally, init viscosity */
     initial_viscosity(E);
+
+    /* update next output and checkpoint times based on restored elapsed_time */
+    update_next_output_times(E);
 
     return;
 }
@@ -686,4 +721,173 @@ int read_tracers_from_checkpoint(struct All_variables *E, const char *output_fil
 
     fclose(fp);
     return 1;
+}
+
+
+/*=======================================================================
+  Sliding Window Checkpoint Pruning & Auto-Restart Implementation
+=========================================================================*/
+
+static void prune_old_checkpoints(struct All_variables *E, int current_cycle)
+{
+    char hist_file[255];
+    FILE *fp;
+    int cycles[1000];
+    int count = 0;
+    int i, r;
+    char path[255];
+
+    if (E->control.checkpoints_to_keep <= 0)
+        return;
+
+    snprintf(hist_file, sizeof(hist_file), "%s.checkpoint_history.txt", E->control.data_file);
+
+    /* 1. Read existing cycle history */
+    fp = fopen(hist_file, "r");
+    if (fp != NULL) {
+        while (count < 990 && fscanf(fp, "%d", &cycles[count]) == 1) {
+            count++;
+        }
+        fclose(fp);
+    }
+
+    /* 2. Append current_cycle if not already the last entry */
+    if (count == 0 || cycles[count - 1] != current_cycle) {
+        cycles[count++] = current_cycle;
+    }
+
+    /* 3. If count exceeds checkpoints_to_keep, prune the oldest entries */
+    while (count > E->control.checkpoints_to_keep) {
+        int old_cycle = cycles[0];
+
+        /* Delete checkpoint files for all ranks at old_cycle */
+        for (r = 0; r < E->parallel.nproc; r++) {
+            snprintf(path, sizeof(path), "%s.chkpt.%d.%d", E->control.data_file, r, old_cycle);
+            remove(path);
+        }
+
+        fprintf(stderr, "Checkpoints: pruned old checkpoint files for cycle %d (keeping last %d checkpoints)\n",
+                old_cycle, E->control.checkpoints_to_keep);
+
+        /* Shift history array left */
+        for (i = 0; i < count - 1; i++) {
+            cycles[i] = cycles[i + 1];
+        }
+        count--;
+    }
+
+    /* 4. Write back updated history */
+    fp = fopen(hist_file, "w");
+    if (fp != NULL) {
+        for (i = 0; i < count; i++) {
+            fprintf(fp, "%d\n", cycles[i]);
+        }
+        fclose(fp);
+    }
+}
+
+
+int determine_auto_restart_checkpoint(struct All_variables *E)
+{
+    char good_file[255];
+    FILE *fp;
+    int cycle = -1;
+    char line[100];
+    int found = 0;
+
+    if (E->parallel.me == 0) {
+        /* 1. Check last_good_checkpoint file */
+        snprintf(good_file, sizeof(good_file), "%s.last_good_checkpoint", E->control.old_P_file);
+        fp = fopen(good_file, "r");
+        if (fp != NULL) {
+            while (fgets(line, sizeof(line), fp)) {
+                if (sscanf(line, "cycle %d", &cycle) == 1) {
+                    found = 1;
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+
+        /* 2. Fallback: check checkpoint_history.txt */
+        if (!found) {
+            char hist_file[255];
+            snprintf(hist_file, sizeof(hist_file), "%s.checkpoint_history.txt", E->control.old_P_file);
+            fp = fopen(hist_file, "r");
+            if (fp != NULL) {
+                int last_c = -1, c;
+                while (fscanf(fp, "%d", &c) == 1) {
+                    last_c = c;
+                }
+                fclose(fp);
+                if (last_c >= 0) {
+                    cycle = last_c;
+                    found = 1;
+                }
+            }
+        }
+
+        /* 3. If cycle identified, verify checkpoint rank 0 file exists */
+        if (found && cycle >= 0) {
+            char chkpt_test[255];
+            snprintf(chkpt_test, sizeof(chkpt_test), "%s.chkpt.0.%d", E->control.old_P_file, cycle);
+            fp = fopen(chkpt_test, "rb");
+            if (fp == NULL) {
+                fprintf(stderr, "Auto-restart: candidate cycle %d found but %s is missing!\n",
+                        cycle, chkpt_test);
+                found = 0;
+                cycle = -1;
+            } else {
+                fclose(fp);
+            }
+        }
+    }
+
+    /* Broadcast decision to all ranks */
+    MPI_Bcast(&found, 1, MPI_INT, 0, E->parallel.world);
+    MPI_Bcast(&cycle, 1, MPI_INT, 0, E->parallel.world);
+
+    if (found && cycle >= 0) {
+        E->control.restart = 1;
+        E->monitor.solution_cycles_init = cycle;
+        if (E->parallel.me == 0) {
+            fprintf(stderr, "Auto-restart: successfully detected checkpoint at cycle %d. Resuming computation.\n", cycle);
+            if (E->fp)
+                fprintf(E->fp, "Auto-restart: successfully detected checkpoint at cycle %d. Resuming computation.\n", cycle);
+        }
+        return 1;
+    } else {
+        E->control.restart = 0;
+        E->monitor.solution_cycles_init = 0;
+        if (E->parallel.me == 0) {
+            fprintf(stderr, "Auto-restart: no valid checkpoint found. Starting initial run from cycle 0.\n");
+            if (E->fp)
+                fprintf(E->fp, "Auto-restart: no valid checkpoint found. Starting initial run from cycle 0.\n");
+        }
+        return 0;
+    }
+}
+
+
+void update_next_output_times(struct All_variables *E)
+{
+    if (E->control.storage_interval_time > 0.0) {
+        double interval = E->control.storage_interval_time;
+        int k = (int)(E->monitor.elapsed_time / interval);
+        E->control.next_storage_time = (k + 1) * interval;
+        if (E->control.next_storage_time <= E->monitor.elapsed_time + 1.0e-4 * interval)
+            E->control.next_storage_time += interval;
+    } else {
+        E->control.next_storage_time = 1.0e20;
+    }
+
+    if (E->control.checkpoint_interval_time > 0.0) {
+        double interval = E->control.checkpoint_interval_time;
+        int k = (int)(E->monitor.elapsed_time / interval);
+        E->control.next_checkpoint_time = (k + 1) * interval;
+        if (E->control.next_checkpoint_time <= E->monitor.elapsed_time + 1.0e-4 * interval)
+            E->control.next_checkpoint_time += interval;
+    } else {
+        E->control.next_checkpoint_time = 1.0e20;
+    }
 }

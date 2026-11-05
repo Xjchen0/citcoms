@@ -40,6 +40,25 @@ This branch (`citcoms_cpp`) represents a complete modernization to **ISO C++17**
 * **Transparent Backward Compatibility**:
   - `visual/combine.py` and `visual/combinesurf.py` automatically detect and delegate to `citcoms_combine` when present, falling back to Python 3 standard library seamlessly if needed.
 
+### 1.4 High-Performance I/O, Advanced Checkpointing & Geological Age Scheduling
+* **Composite Output Formats & De-duplication**:
+  - Natively supports composite formats `"ascii,hdf5"` and `"ascii,vtk"`.
+  - Decoupled ASCII 3D volume outputs: When `output_optional_ascii` specifies 1D monitoring (`horiz_avg`), redundant 3D body files (`.velo`, `.visc`, and cycle 0 `.coord`) are automatically suppressed, eliminating inode exhaustion and eliminating duplicate 3D writes in composite modes.
+* **Fault-Tolerant Checkpointing**:
+  - Sliding window pruning (`checkpoints_to_keep = 3`) to eliminate disk quota exhaustion.
+  - Two-phase commit with global MPI barrier synchronization to guarantee crash-safe restarts under scheduler walltime limits (`SIGKILL`).
+  - Zero-touch auto-resume (`restart = auto`) for hands-off HPC job array chaining.
+  - Wall-clock checkpoint triggering (`checkpoint_walltime`) and guaranteed exit checkpoints (`checkpoint_on_termination = on`).
+* **Geological Age Triggers & Exact Time Snapping**:
+  - Direct scheduling via physical Myr (`storage_interval_myr`, `checkpoint_interval_myr`) mapped via internal `scalet`.
+  - Exact time step snapping (`exact_time_output = on`) to ensure frames land exactly on target Myr boundaries for uniform animation rendering.
+* **ASCII-Independent Continuation**:
+  - Two-stage restarts (`tic_method = -1`, `tracer.ic_method = 2`) directly read binary checkpoint (`.chkpt`) files without intermediate uncompressed ASCII files.
+* **ParaView 1-Click Interactive Visualization (VTK & HDF5)**:
+  - VTK PVD Collection (`.pvd`): Rank 0 continuously generates and updates `${data_file}.pvd` linking multi-block `.vtm` / `.pvts` files with physical geological ages (Myr).
+  - HDF5 XDMF Indexing (`.xdmf`): Maps 12-cap curvilinear structured meshes (`3DSMesh`) and hyperslab slices to parallel HDF5 datasets, enabling direct native 3D visualization and animated time playback in ParaView.
+  - Standalone tool `bin/citcoms_h5_to_xdmf.py` enables 1-second retroactive XDMF indexing of existing HDF5 runs.
+
 ---
 
 ## 2. Directory Structure
@@ -51,7 +70,8 @@ citcoms_cpp/
 │   ├── Citcom.cpp          # Main simulation driver entrypoint
 │   ├── CitcomSRegional.cpp # Regional solver driver (1 cap)
 │   ├── CitcomSFull.cpp     # Full sphere solver driver (12 caps)
-│   └── citcoms_combine.cpp # High-performance C++17 data combiner
+│   ├── citcoms_combine.cpp # High-performance C++17 data combiner
+│   └── citcoms_h5_to_xdmf.py # Retroactive ParaView XDMF indexer
 ├── lib/                    # CitcomS C++17 core solver library
 │   ├── global_defs.h       # Core headers, definitions, and data structures
 │   ├── prototypes.h        # Modernized ISO C++ function prototypes
@@ -171,12 +191,54 @@ python3 visual/combinesurf.py model 100 65 65 33 1 2 2 1
 
 ## 6. CitcomS Configuration Guide
 
-### 6.1 Output Formats (`output_format`)
+### 6.1 Output Formats (`output_format`) & Format-Specific Options
+CitcomS supports single and composite output formats:
 * `output_format = "ascii"`: Standard columnar ASCII files (`.coord`, `.velo`, `.visc`, `.temp`).
 * `output_format = "ascii,vtk"`: Simultaneous 1D monitoring profiles and 3D VTK visualization files (compatible with ParaView).
 * `output_format = "ascii,hdf5"`: Simultaneous 1D monitoring profiles and parallel HDF5 data archives.
+*(Note: Enabling `vtk` and `hdf5` simultaneously is prohibited to avoid redundant 3D volume duplication and I/O congestion).*
 
-### 6.2 Checkpoint & Two-Stage Restarts
+Format-specific optional variables are configured independently:
+* `output_optional_ascii = "horiz_avg"` (default): Outputs only lightweight 1D thermal convergence profiles (`.ave` / `.horiz_avg`, ~3 KB per step across all ranks).
+* `output_optional_vtk = ""` (default): Pure 3D volume fields (temperature, velocity, viscosity, coordinates) without pseudo-3D surface zero-padding or 6-component stress bloat.
+* `output_optional_h5 = "surf,botm,horiz_avg"` (default): Packs 3D volume, 2D dynamic topography/heatflux, and 1D horizontal averages into a single compressed `.h5` file per step.
+*(Legacy `output_optional` parameter is maintained for backward compatibility).*
+
+### 6.2 Decoupled ASCII 3D Volume Outputs & Composite Mode De-duplication
+By default, when `output_optional_ascii` is set to `"horiz_avg"` (or under composite modes `"ascii,hdf5"` and `"ascii,vtk"`):
+* 3D volume ASCII files (`.velo.*`, `.visc.*`, and cycle 0 `.coord.*`) are **automatically suppressed**.
+* Only the 1D convergence profile (`.horiz_avg.*` / `.ave.*`) is output in ASCII (~3 KB per step cluster-wide), completely eliminating cluster inode pressure and removing redundant 3D writes.
+* **Restoring 3D ASCII outputs**: When running standalone ASCII models where 3D volume files are desired, explicitly add `"velo"`, `"visc"`, `"coord"`, `"3d"`, or `"all"` into `output_optional_ascii`:
+  ```ini
+  output_format = "ascii"
+  output_optional_ascii = "horiz_avg,velo,visc"  # or "3d", "all"
+  ```
+
+### 6.3 Advanced Checkpointing & Crash Safety
+* **Zero-Touch Auto-Resume (`restart = "auto"`)**:
+  Recommended for HPC queue workflows. Automatically finds and resumes from the latest verified checkpoint (`.last_good_checkpoint`). If no checkpoint is found, it begins a clean simulation from cycle 0 without requiring manual parameter file edits across job chains.
+* **Sliding Window Checkpoint Pruning (`checkpoints_to_keep = 3`)**:
+  Keeps only the last $N$ valid checkpoints on disk (default `3`). When a new checkpoint is successfully committed, the oldest is safely removed across all MPI ranks, preventing disk quota and inode exhaustion on HPC clusters. Set to `0` to keep all checkpoints indefinitely.
+* **Two-Phase Commit**:
+  Uses global MPI barrier synchronization (`parallel_process_sync`) and atomic metadata updating on Rank 0 to guarantee crash-proof checkpoints against HPC scheduler walltime terminations (`SIGKILL`).
+* **Wall-Clock Checkpointing (`checkpoint_walltime`)**:
+  Creates checkpoints at fixed real elapsed wall-clock intervals (e.g. `checkpoint_walltime = 7200` for every 2 hours), decoupled from fluctuating CFL timesteps.
+* **Termination Checkpoint (`checkpoint_on_termination = "on"`)**:
+  Guarantees writing a final valid checkpoint when the simulation completes or reaches `max_timesteps` / `cpu_limits_in_seconds`.
+
+### 6.4 Geological Age (Myr) Triggers & Exact Time Snapping
+* **Physical Time Triggers (`storage_interval_myr`, `checkpoint_interval_myr`)**:
+  Users can specify output and checkpoint intervals directly in physical geological age (Myr):
+  ```ini
+  storage_interval_myr = 1.0     # Output fields every 1.0 Myr
+  checkpoint_interval_myr = 5.0  # Create checkpoints every 5.0 Myr
+  ```
+  CitcomS automatically maps physical Myr to internal dimensionless time units using `scalet = (R^2 / kappa) / (1e6 * 365.25 * 24 * 3600)`.
+  *(Note: When physical intervals are configured without explicit step intervals, step-based counters are automatically disabled).*
+* **Exact Time Step Snapping (`exact_time_output = "on"`)**:
+  Dynamically clamps the CFL timestep $\Delta t$ at milestone steps so simulation frames land precisely on requested Myr boundaries (e.g., 1.000 Myr, 2.000 Myr) for uniform, flicker-free animation rendering.
+
+### 6.5 Checkpoint-Based Continuation & Two-Stage Restarts
 CitcomS supports full binary checkpointing and seamless multi-stage restarts:
 ```ini
 # Stage 2 model inheriting temperature & tracers from Stage 1:
@@ -186,7 +248,29 @@ tracer.ic_method = 2
 datafile_old = "stage1_output/model_stage1"
 solution_cycles_init = 5000
 ```
-CitcomS directly reads high-precision binary checkpoint `.chkpt` files without requiring large uncompressed ASCII velocity or tracer exports.
+CitcomS directly reads high-precision binary checkpoint `.chkpt` files without requiring large uncompressed ASCII velocity or tracer exports, with automatic fallback for backward compatibility.
+
+### 6.6 ParaView 1-Click Interactive Visualization (VTK & HDF5)
+CitcomS provides automated timeline index generation for both VTK and HDF5, enabling instant 3D interactive rendering and dynamic playback in ParaView without any manual data stitching:
+- **VTK Workflow (`output_format = "ascii,vtk"`)**:
+  - **Files Generated**: `${data_file}.pvd` (master temporal collection), `${data_file}.<cycle>.vtm` (multi-block index), and `${data_file}.proc*.<cycle>.vts` (per-rank structured grids).
+  - **ParaView Usage**:
+    1. Open ParaView, click **File -> Open**, and select `${data_file}.pvd`.
+    2. Click **Apply**. The complete 3D spherical mantle renders immediately.
+    3. Press **Play (▶️)** on the top toolbar to watch the thermal plumes and mantle convection evolve smoothly across geological time (Myr)!
+- **HDF5 Workflow (`output_format = "ascii,hdf5"`)**:
+  - **Files Generated**: `${data_file}.xdmf` (master temporal & spatial grid index), `${data_file}.h5` (nodal mesh geometry), and `${data_file}.<cycle>.h5` (physical fields).
+  - **ParaView Usage**:
+    1. Open ParaView, click **File -> Open**, and select `${data_file}.xdmf`.
+    2. Choose the default **Xdmf Reader** when prompted, and click **Apply**.
+    3. The 12 caps are automatically stitched into the full 3D sphere with temperature, velocity, and viscosity fields loaded.
+    4. Press **Play (▶️)** to animate the simulation directly from high-throughput parallel HDF5 data.
+- **Retroactive Indexing of Existing HDF5 Runs**:
+  If you have existing `.h5` files from past runs that lack an `.xdmf` file, use the bundled CLI tool:
+  ```bash
+  python3 bin/citcoms_h5_to_xdmf.py --datafile stage1_preheat --dir ./output
+  ```
+  This generates `stage1_preheat.xdmf` in under 1 second.
 
 ---
 

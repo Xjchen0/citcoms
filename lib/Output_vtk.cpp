@@ -432,6 +432,107 @@ static void write_pvts(struct All_variables *E, int cycles)
     fclose(fp);
 }
 
+
+static void write_pvd(struct All_variables *E, int cycles)
+{
+    FILE *fp_hist;
+    FILE *fp_pvd;
+    char hist_file[512];
+    char pvd_file[512];
+    char line[512];
+    char target_file[512];
+    double time_val;
+    int max_entries = 10000;
+    int count = 0;
+    int i;
+    int *hist_cycles;
+    double *hist_times;
+    char (*hist_files)[512];
+
+    if (E->sphere.caps == 12) {
+        snprintf(target_file, sizeof(target_file), "%s.%d.vtm", E->control.data_prefix, cycles);
+    } else {
+        snprintf(target_file, sizeof(target_file), "%s.%d.pvts", E->control.data_prefix, cycles);
+    }
+
+    if (E->data.scalet > 0.0) {
+        time_val = (double)(E->monitor.elapsed_time * E->data.scalet);
+    } else {
+        time_val = (double)E->monitor.elapsed_time;
+    }
+
+    snprintf(hist_file, sizeof(hist_file), "%s.vtk_history.txt", E->control.data_file);
+    snprintf(pvd_file, sizeof(pvd_file), "%s.pvd", E->control.data_file);
+
+    hist_cycles = (int *)malloc(max_entries * sizeof(int));
+    hist_times = (double *)malloc(max_entries * sizeof(double));
+    hist_files = (char (*)[512])malloc(max_entries * 512);
+
+    if (!hist_cycles || !hist_times || !hist_files) {
+        if (hist_cycles) free(hist_cycles);
+        if (hist_times) free(hist_times);
+        if (hist_files) free(hist_files);
+        return;
+    }
+
+    /* Read existing history and filter entries >= cycles (restart protection) */
+    fp_hist = fopen(hist_file, "r");
+    if (fp_hist) {
+        while (fgets(line, sizeof(line), fp_hist) && count < max_entries - 1) {
+            int c;
+            double t;
+            char f[512];
+            if (sscanf(line, "%d %lf %511s", &c, &t, f) == 3) {
+                if (c < cycles) {
+                    hist_cycles[count] = c;
+                    hist_times[count] = t;
+                    strncpy(hist_files[count], f, 511);
+                    hist_files[count][511] = '\0';
+                    count++;
+                }
+            }
+        }
+        fclose(fp_hist);
+    }
+
+    /* Add current step */
+    if (count < max_entries) {
+        hist_cycles[count] = cycles;
+        hist_times[count] = time_val;
+        strncpy(hist_files[count], target_file, 511);
+        hist_files[count][511] = '\0';
+        count++;
+    }
+
+    /* Rewrite history file */
+    fp_hist = fopen(hist_file, "w");
+    if (fp_hist) {
+        for (i = 0; i < count; i++) {
+            fprintf(fp_hist, "%d %.8e %s\n", hist_cycles[i], hist_times[i], hist_files[i]);
+        }
+        fclose(fp_hist);
+    }
+
+    /* Write PVD collection file */
+    fp_pvd = fopen(pvd_file, "w");
+    if (fp_pvd) {
+        fprintf(fp_pvd, "<?xml version=\"1.0\"?>\n");
+        fprintf(fp_pvd, "<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\">\n");
+        fprintf(fp_pvd, "  <Collection>\n");
+        for (i = 0; i < count; i++) {
+            fprintf(fp_pvd, "    <DataSet timestep=\"%.6g\" group=\"\" part=\"0\" file=\"%s\"/>\n",
+                    hist_times[i], hist_files[i]);
+        }
+        fprintf(fp_pvd, "  </Collection>\n");
+        fprintf(fp_pvd, "</VTKFile>\n");
+        fclose(fp_pvd);
+    }
+
+    free(hist_cycles);
+    free(hist_times);
+    free(hist_files);
+}
+
 static void write_ascii_array(int nn, int perLine, float *array, FILE *fp)
 {
     int i;
@@ -738,6 +839,9 @@ void vtk_output(struct All_variables *E, int cycles)
         }
         else
             write_pvts(E, cycles);
+
+        /* ParaView PVD collection file */
+        write_pvd(E, cycles);
     }
     return;
 }

@@ -23,6 +23,33 @@ Version 3.3.1-cpp17 (2026-11-05)
  * Compatibility Guarantee:
    - 100% strictly identical mathematical equations, stiffness matrices, multigrid algorithms, and configuration syntax (.cfg).
 
+ * Advanced Fault-Tolerant Checkpointing & Auto-Resume:
+   - Sliding Window Checkpoint Pruning (`checkpoints_to_keep`, default: 3): Automatically purges older checkpoint files across all MPI ranks to prevent cluster disk quota and inode exhaustion during long simulations.
+   - Two-Phase Commit with Global Barrier: Guaranteed crash safety under HPC scheduler walltime expiration (`SIGKILL`) via `parallel_process_sync` and rank-0 `.last_good_checkpoint` atomic commit.
+   - Zero-Touch Auto-Resume (`restart = auto`): Automatically discovers and resumes from the latest verified checkpoint, or initializes from cycle 0, enabling hands-off Slurm/PBS job array chaining without editing `.cfg` parameter files.
+   - Wall-Clock Checkpointing (`checkpoint_walltime`): Checkpoints based on real elapsed execution time, decoupled from fluctuating CFL time steps.
+   - Termination Checkpoint (`checkpoint_on_termination = on`): Ensures a final verified checkpoint before exiting upon reaching `max_timesteps` or `cpu_limits_in_seconds`.
+
+ * Geological Age (Myr) Triggers & Exact Time Snapping:
+   - Physical Time Triggers (`storage_interval_myr`, `checkpoint_interval_myr`): Direct scheduling of field outputs and checkpoints in physical geological age (Myr), automatically mapped to internal dimensionless time via `scalet = (R^2 / kappa) / (1e6 * 365.25 * 24 * 3600)`.
+   - Exact Time Step Snapping (`exact_time_output = on`): Dynamically clamps the CFL timestep dt at milestone steps to land precisely on requested Myr boundaries for uniform, flicker-free visualization animations.
+
+ * High-Performance Dual-Format I/O & Decoupled 3D Volume Outputs:
+   - Dual-Format Composite Output: Eliminates the 20-year mutual exclusivity between ASCII, HDF5, and VTK. CitcomS natively supports composite formats `"ascii,hdf5"` and `"ascii,vtk"`.
+   - Decoupled ASCII 3D Volume Outputs: Suppresses redundant 3D body files (`.velo`, `.visc`, and cycle 0 `.coord`) when `output_optional_ascii` specifies 1D monitoring (`horiz_avg`), eliminating massive cluster inode pressure.
+   - Composite Mode De-duplication: In composite output modes (`ascii,hdf5` and `ascii,vtk`), ASCII handles 1D thermal convergence profiles (`.horiz_avg` / `.ave`) while HDF5 or VTK handles 3D volume visualization, completely eliminating duplicate 3D writes.
+   - Selective 3D ASCII Re-enablement: 3D ASCII volume files can be selectively restored by specifying `velo`, `visc`, `coord`, `3d`, or `all` in `output_optional_ascii`.
+   - Format-Specific Sensible Defaults: Independent configuration buffers for `output_optional_ascii`, `output_optional_vtk`, and `output_optional_h5`.
+
+ * Checkpoint-Based Continuation & Two-Stage Restarts:
+   - Thermal spin-up continuation (`tic_method = -1`) and tracer continuation (`tracer.ic_method = 2`) now directly read high-precision binary checkpoint (`.chkpt`) files without requiring uncompressed ASCII velocity or tracer exports, with automatic fallback for backward compatibility.
+
+ * ParaView 1-Click Interactive Visualization (VTK & HDF5):
+   - VTK PVD Collection Indexing: Master Rank 0 continuously generates and updates `${data_file}.pvd` linking multi-block `.vtm` / `.pvts` files with physical geological ages (Myr) and automatic timeline rollback protection during restart. Open `${data_file}.pvd` directly in ParaView for instant 3D animation playback.
+   - HDF5 XDMF Curvilinear Grid Indexing: Automatic generation of `${data_file}.xdmf` mapping 12-cap curvilinear 3D structured meshes (`3DSMesh`) and hyperslab slices to parallel HDF5 datasets, enabling direct native 3D visualization and animated time playback in ParaView without intermediate conversion.
+   - Retroactive Indexing Tool (`bin/citcoms_h5_to_xdmf.py`): Standalone utility to generate XDMF indexes on existing historical `.h5` simulation runs in under 1 second.
+   - Automated Unit Testing Suite (`tests/`): Added comprehensive test suite verifying PVD/XDMF XML schema validity, restart history rollback, sliding window checkpoint pruning, and 1D monitoring ASCII deduplication.
+
 
 Version 3.3.0
 

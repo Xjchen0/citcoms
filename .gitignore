@@ -59,4 +59,8 @@ config.h.in~
 
 visual/OpenDXMacro/Makefile
 
+# Python bytecode and cache
+__pycache__/
+*.pyc
+
 visual/OpenDXMacro/Makefile.in
