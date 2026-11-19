@@ -126,13 +126,13 @@ constexpr auto citcom_max(const T& a, const U& b) {
 #define MAX_LEVELS 12   /* max. number of multigrid levels */
 #define NCS      14   /* max. number of sphere caps */
 
-/* type of elt_del and elt_c arrays */
-/* double precision doesn't help,
- * probably due to the coordinate transformation c33matrix */
-#if 1
-    typedef float higher_precision;
-#else
+/* type of Eqn_k, elt_del and elt_c arrays */
+/* Default float preserves legacy memory footprint; enable -DCITCOMS_DOUBLE_MATRIX
+ * for double precision under high viscosity contrast / high aug_number. */
+#ifdef CITCOMS_DOUBLE_MATRIX
     typedef double higher_precision;
+#else
+    typedef float higher_precision;
 #endif
 
 

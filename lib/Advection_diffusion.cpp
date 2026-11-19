@@ -30,6 +30,7 @@
      Brooks PhD thesis (Caltech) which refers back to Hughes, Liu and Brooks.  */
 
 #include <sys/types.h>
+#include <vector>
 
 #include "element_definitions.h"
 #include "global_defs.h"
@@ -49,7 +50,8 @@ static void pg_solver(struct All_variables *E,
 static void pg_shape_fn(struct All_variables *E, int el,
                         struct Shape_function *PG,
                         struct Shape_function_dx *GNx,
-                        float VV[4][9], double rtf[4][9],
+                        float VV[4][9], const double inv_r[9],
+                        const double inv_rsin[9],
                         double diffusion, int m);
 static void element_residual(struct All_variables *E, int el,
                              struct Shape_function *PG,
@@ -58,7 +60,8 @@ static void element_residual(struct All_variables *E, int el,
                              float VV[4][9],
                              double **field, double **fielddot,
                              struct SOURCES *Q0,
-                             double Eres[9], double rtf[4][9],
+                             double Eres[9], const double inv_r[9],
+                             const double inv_rsin[9],
                              double diff, float **BC,
                              unsigned int **FLAGS, int m);
 static void filter(struct All_variables *E);
@@ -437,23 +440,46 @@ static void pg_solver(struct All_variables *E,
     const int sphere_key = 1;
     const int lev=E->mesh.levmax;
 
-    for (m=1;m<=E->sphere.caps_per_proc;m++)
+    /* Cache static mesh quadrature geometry (1/r and 1/(r*sin(theta))) once per cap/element */
+    static std::vector<double> inv_r_cache[NCS], inv_rsin_cache[NCS];
+    static int cache_nel[NCS] = {0};
+
+    for (m=1;m<=E->sphere.caps_per_proc;m++) {
+      const int nel = E->lmesh.nel;
+      if (cache_nel[m] != nel) {
+        inv_r_cache[m].resize((size_t)nel * 9);
+        inv_rsin_cache[m].resize((size_t)nel * 9);
+        for (el = 1; el <= nel; el++) {
+          get_rtf_at_vpts(E, m, lev, el, rtf);
+          double *ir = &inv_r_cache[m][(size_t)(el - 1) * 9];
+          double *irs = &inv_rsin_cache[m][(size_t)(el - 1) * 9];
+          ir[0] = 0.0;
+          irs[0] = 0.0;
+          for (i = 1; i <= VPOINTS3D; i++) {
+            ir[i] = rtf[3][i];
+            irs[i] = rtf[3][i] / sin(rtf[1][i]);
+          }
+        }
+        cache_nel[m] = nel;
+      }
       for(i=1;i<=E->lmesh.nno;i++)
  	 DTdot[m][i] = 0.0;
+    }
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)
        for(el=1;el<=E->lmesh.nel;el++)    {
 
           velo_from_element(E,VV,m,el,sphere_key);
 
-          get_rtf_at_vpts(E, m, lev, el, rtf);
+          const double *ir = &inv_r_cache[m][(size_t)(el - 1) * 9];
+          const double *irs = &inv_rsin_cache[m][(size_t)(el - 1) * 9];
 
           /* XXX: replace diff with refstate.thermal_conductivity */
           pg_shape_fn(E, el, &PG, &(E->gNX[m][el]), VV,
-                      rtf, diff, m);
+                      ir, irs, diff, m);
           element_residual(E, el, &PG, &(E->gNX[m][el]), &(E->gDA[m][el]),
                            VV, T, Tdot,
-                           Q0, Eres, rtf, diff, E->sphere.cap[m].TB,
+                           Q0, Eres, ir, irs, diff, E->sphere.cap[m].TB,
                            FLAGS, m);
 
         for(a=1;a<=ends;a++) {
@@ -485,13 +511,14 @@ static void pg_solver(struct All_variables *E,
 static void pg_shape_fn(struct All_variables *E, int el,
                         struct Shape_function *PG,
                         struct Shape_function_dx *GNx,
-                        float VV[4][9], double rtf[4][9],
+                        float VV[4][9], const double inv_r[9],
+                        const double inv_rsin[9],
                         double diffusion, int m)
 {
     int i,j;
 
     double uc1,uc2,uc3;
-    double u1,u2,u3,sint[9];
+    double u1,u2,u3;
     double uxse,ueta,ufai,xse,eta,fai,adiff;
 
     double prod1,unorm,twodiff;
@@ -521,9 +548,6 @@ static void pg_shape_fn(struct All_variables *E, int el,
 
     adiff = (unorm>0.000001)?( (uxse*xse+ueta*eta+ufai*fai)/(2.0*unorm) ):0.0;
 
-    for(i=1;i<=VPOINTS3D;i++)
-       sint[i] = rtf[3][i]/sin(rtf[1][i]);
-
     for(i=1;i<=VPOINTS3D;i++) {
        u1 = u2 = u3 = 0.0;
        for(j=1;j<=ENODES3D;j++)  /* this line heavily used */ {
@@ -533,8 +557,8 @@ static void pg_shape_fn(struct All_variables *E, int el,
 	    }
 
        for(j=1;j<=ENODES3D;j++) {
-            prod1 = (u1 * GNx->vpt[GNVXINDEX(0,j,i)]*rtf[3][i] +
-                     u2 * GNx->vpt[GNVXINDEX(1,j,i)]*sint[i] +
+            prod1 = (u1 * GNx->vpt[GNVXINDEX(0,j,i)]*inv_r[i] +
+                     u2 * GNx->vpt[GNVXINDEX(1,j,i)]*inv_rsin[i] +
                      u3 * GNx->vpt[GNVXINDEX(2,j,i)] ) ;
 
 	    PG->vpt[GNVINDEX(j,i)] = E->N.vpt[GNVINDEX(j,i)] + adiff * prod1;
@@ -558,14 +582,15 @@ static void element_residual(struct All_variables *E, int el,
                              float VV[4][9],
                              double **field, double **fielddot,
                              struct SOURCES *Q0,
-                             double Eres[9], double rtf[4][9],
+                             double Eres[9], const double inv_r[9],
+                             const double inv_rsin[9],
                              double diff, float **BC,
                              unsigned int **FLAGS, int m)
 {
     int i,j,a,k,node,nodes[5],d,aid,back_front,onedfns;
     double Q;
     double dT[9];
-    double tx1[9],tx2[9],tx3[9],sint[9];
+    double tx1[9],tx2[9],tx3[9];
     double v1[9],v2[9],v3[9];
     double adv_dT,t2[4];
     double T,DT;
@@ -594,9 +619,6 @@ static void element_residual(struct All_variables *E, int el,
       v3[i] = tx3[i]=  0.0;
       }
 
-    for(i=1;i<=vpts;i++)
-        sint[i] = rtf[3][i]/sin(rtf[1][i]);
-
     for(j=1;j<=ends;j++)       {
       node = E->ien[m][el].node[j];
       T = field[m][node];
@@ -607,8 +629,8 @@ static void element_residual(struct All_variables *E, int el,
 
       for(i=1;i<=vpts;i++)  {
           dT[i] += DT * E->N.vpt[GNVINDEX(j,i)];
-          tx1[i] += GNx->vpt[GNVXINDEX(0,j,i)] * T * rtf[3][i];
-          tx2[i] += GNx->vpt[GNVXINDEX(1,j,i)] * T * sint[i];
+          tx1[i] += GNx->vpt[GNVXINDEX(0,j,i)] * T * inv_r[i];
+          tx2[i] += GNx->vpt[GNVXINDEX(1,j,i)] * T * inv_rsin[i];
           tx3[i] += GNx->vpt[GNVXINDEX(2,j,i)] * T;
           sfn = E->N.vpt[GNVINDEX(j,i)];
           v1[i] += VV[1][j] * sfn;
@@ -658,8 +680,8 @@ static void element_residual(struct All_variables *E, int el,
               * ((dT[i] + v1[i]*tx1[i] + v2[i]*tx2[i] + v3[i]*tx3[i])*rho*cp
                  - heating )
               + diff * dOmega->vpt[i] * E->heating_latent[m][el]
-              * (GNx->vpt[GNVXINDEX(0,j,i)]*tx1[i]*rtf[3][i] +
-                 GNx->vpt[GNVXINDEX(1,j,i)]*tx2[i]*sint[i] +
+              * (GNx->vpt[GNVXINDEX(0,j,i)]*tx1[i]*inv_r[i] +
+                 GNx->vpt[GNVXINDEX(1,j,i)]*tx2[i]*inv_rsin[i] +
                  GNx->vpt[GNVXINDEX(2,j,i)]*tx3[i] );
       }
     }

@@ -27,8 +27,18 @@
  */
 #include <math.h>
 #include <sys/types.h>
+#include <vector>
 #include "element_definitions.h"
 #include "global_defs.h"
+
+namespace {
+inline double* ensure_mg_buf(std::vector<double>& vec, size_t n) {
+    if (vec.size() < n) {
+        vec.resize(n);
+    }
+    return vec.data();
+}
+} // namespace
 
 #ifdef _UNICOS
 #include <fortran.h>
@@ -173,14 +183,17 @@ double multi_grid(struct All_variables *E, double **d1, double **F, double acc, 
 				/* because it's recursive, need a copy at
 				    each level */
 
+    static std::vector<double> ws_del_vel[MAX_LEVELS][NCS], ws_AU[MAX_LEVELS][NCS];
+    static std::vector<double> ws_vel[MAX_LEVELS][NCS], ws_res[MAX_LEVELS][NCS], ws_fl[MAX_LEVELS][NCS];
+
     for(i=E->mesh.levmin;i<=E->mesh.levmax;i++)
       for(m=1;m<=E->sphere.caps_per_proc;m++)    {
-	del_vel[i][m]=(double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
-	AU[i][m] = (double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
-	vel[i][m]=(double *)malloc((E->lmesh.NEQ[i]+1)*sizeof(double));
-	res[i][m]=(double *)malloc((E->lmesh.NEQ[i])*sizeof(double));
+	del_vel[i][m] = ensure_mg_buf(ws_del_vel[i][m], (size_t)(E->lmesh.NEQ[i]+1));
+	AU[i][m]      = ensure_mg_buf(ws_AU[i][m],      (size_t)(E->lmesh.NEQ[i]+1));
+	vel[i][m]     = ensure_mg_buf(ws_vel[i][m],     (size_t)(E->lmesh.NEQ[i]+1));
+	res[i][m]     = ensure_mg_buf(ws_res[i][m],     (size_t)(E->lmesh.NEQ[i]+1));
 	if (i<E->mesh.levmax)
-	  fl[i][m]=(double *)malloc((E->lmesh.NEQ[i])*sizeof(double));
+	  fl[i][m]    = ensure_mg_buf(ws_fl[i][m],      (size_t)(E->lmesh.NEQ[i]+1));
       }
 
     Vnmax = E->control.mg_cycle;
@@ -246,8 +259,9 @@ double multi_grid(struct All_variables *E, double **d1, double **F, double acc, 
             strip_bcs_from_residual(E,del_vel[ulev],ulev);
             gauss_seidel(E,del_vel[ulev],res[ulev],AU[ulev],0.01,&cycles,ulev,1);
 
-            AudotAu = global_vdot(E,AU[ulev],AU[ulev],ulev);
-            alpha = global_vdot(E,AU[ulev],res[ulev],ulev)/AudotAu;
+            double AudotRes = 0.0;
+            global_vdot2(E, AU[ulev], AU[ulev], res[ulev], ulev, &AudotAu, &AudotRes);
+            alpha = (AudotAu != 0.0) ? (AudotRes / AudotAu) : 0.0;
 
             for(m=1;m<=E->sphere.caps_per_proc;m++)
               for(i=0;i<E->lmesh.NEQ[ulev];i++)   {
@@ -272,17 +286,7 @@ double multi_grid(struct All_variables *E, double **d1, double **F, double acc, 
     }
     residual = sqrt(global_vdot(E,F,F,hl));
     
-    for(i=E->mesh.levmin;i<=E->mesh.levmax;i++)
-      for(m=1;m<=E->sphere.caps_per_proc;m++) {
-	free((double*) del_vel[i][m]);
-	free((double*) AU[i][m]);
-	free((double*) vel[i][m]);
-	free((double*) res[i][m]);
-	if (i<E->mesh.levmax)
-	  free((double*) fl[i][m]);
-      }
-    
-    
+    /* Persistent multigrid workspace retained across calls */
     return(residual);
 }
 
@@ -318,15 +322,19 @@ double conj_grad(struct All_variables *E, double **d0, double **F, double acc, i
 
     steps = *cycles;
 
+    static std::vector<double> ws_r0[NCS], ws_r1[NCS], ws_r2[NCS], ws_z0[NCS], ws_z1[NCS];
+    static std::vector<double> ws_p1[NCS], ws_p2[NCS], ws_Ap[NCS];
+    const size_t alloc_neq = (size_t)(high_neq + 1);
+
     for(m=1;m<=E->sphere.caps_per_proc;m++)    {
-      r0[m] = (double *)malloc(E->lmesh.NEQ[mem_lev]*sizeof(double));
-      r1[m] = (double *)malloc(E->lmesh.NEQ[mem_lev]*sizeof(double));
-      r2[m] = (double *)malloc(E->lmesh.NEQ[mem_lev]*sizeof(double));
-      z0[m] = (double *)malloc(E->lmesh.NEQ[mem_lev]*sizeof(double));
-      z1[m] = (double *)malloc(E->lmesh.NEQ[mem_lev]*sizeof(double));
-      p1[m] = (double *)malloc((1+E->lmesh.NEQ[mem_lev])*sizeof(double));
-      p2[m] = (double *)malloc((1+E->lmesh.NEQ[mem_lev])*sizeof(double));
-      Ap[m] = (double *)malloc((1+E->lmesh.NEQ[mem_lev])*sizeof(double));
+      r0[m] = ensure_mg_buf(ws_r0[m], alloc_neq);
+      r1[m] = ensure_mg_buf(ws_r1[m], alloc_neq);
+      r2[m] = ensure_mg_buf(ws_r2[m], alloc_neq);
+      z0[m] = ensure_mg_buf(ws_z0[m], alloc_neq);
+      z1[m] = ensure_mg_buf(ws_z1[m], alloc_neq);
+      p1[m] = ensure_mg_buf(ws_p1[m], alloc_neq);
+      p2[m] = ensure_mg_buf(ws_p2[m], alloc_neq);
+      Ap[m] = ensure_mg_buf(ws_Ap[m], alloc_neq);
     }
 
     for(m=1;m<=E->sphere.caps_per_proc;m++)
@@ -394,17 +402,7 @@ double conj_grad(struct All_variables *E, double **d0, double **F, double acc, i
 
     strip_bcs_from_residual(E,d0,level);
 
-    for(m=1;m<=E->sphere.caps_per_proc;m++)    {
-      free((double*) r0[m]);
-      free((double*) r1[m]);
-      free((double*) r2[m]);
-      free((double*) z0[m]);
-      free((double*) z1[m]);
-      free((double*) p1[m]);
-      free((double*) p2[m]);
-      free((double*) Ap[m]);
-    }
-
+    /* Persistent CG workspace retained across calls */
     return(residual);   }
 #endif /* !USE_CUDA */
 
@@ -646,44 +644,73 @@ void gauss_seidel(struct All_variables *E, double **d0, double **F, double **Ad,
 	    E->temp1[m][eqn3] = Ad[m][eqn3];
             }
 
-      for (m=1;m<=E->sphere.caps_per_proc;m++)
- 	for(i=1;i<=E->lmesh.NNO[level];i++)     {
+      for (m=1;m<=E->sphere.caps_per_proc;m++) {
+        double * __restrict__ Ad_m = Ad[m];
+        double * __restrict__ temp_m = E->temp[m];
+        double * __restrict__ d0_m = d0[m];
+        const double * __restrict__ F_m = F[m];
+        const double * __restrict__ BI_m = E->BI[level][m];
+        const unsigned int * __restrict__ NODE_m = E->NODE[level][m];
+        const struct ID * __restrict__ ID_m = E->ID[level][m];
+        const int * __restrict__ nmap_base = E->Node_map[level][m];
+        const higher_precision * __restrict__ ek1_base = E->Eqn_k1[level][m];
+        const higher_precision * __restrict__ ek2_base = E->Eqn_k2[level][m];
+        const higher_precision * __restrict__ ek3_base = E->Eqn_k3[level][m];
+        const int nno_lev = E->lmesh.NNO[level];
 
-	    eqn1=E->ID[level][m][i].doff[1];
-	    eqn2=E->ID[level][m][i].doff[2];
-	    eqn3=E->ID[level][m][i].doff[3];
-            C=E->Node_map[level][m]+(i-1)*max_eqn;
-	    B1=E->Eqn_k1[level][m]+(i-1)*max_eqn;
-	    B2=E->Eqn_k2[level][m]+(i-1)*max_eqn;
- 	    B3=E->Eqn_k3[level][m]+(i-1)*max_eqn;
+        for(i=1;i<=nno_lev;i++)     {
+
+	    eqn1=ID_m[i].doff[1];
+	    eqn2=ID_m[i].doff[2];
+	    eqn3=ID_m[i].doff[3];
+            const size_t row_off = (size_t)(i-1)*max_eqn;
+            const int * __restrict__ C_r = nmap_base + row_off;
+	    const higher_precision * __restrict__ B1_r = ek1_base + row_off;
+	    const higher_precision * __restrict__ B2_r = ek2_base + row_off;
+ 	    const higher_precision * __restrict__ B3_r = ek3_base + row_off;
 
                  /* Ad on boundaries differs after the following operation, but
                   no communications are needed yet, because boundary Ad will
                   not be used for the G-S iterations for interior nodes */
 
+            double a1 = Ad_m[eqn1];
+            double a2 = Ad_m[eqn2];
+            double a3 = Ad_m[eqn3];
             for(j=3;j<max_eqn;j++)  {
-                 UU = E->temp[m][C[j]];
-                 Ad[m][eqn1] += B1[j]*UU;
-                 Ad[m][eqn2] += B2[j]*UU;
-                 Ad[m][eqn3] += B3[j]*UU;
+                 const double uu = temp_m[C_r[j]];
+                 a1 += (double)B1_r[j]*uu;
+                 a2 += (double)B2_r[j]*uu;
+                 a3 += (double)B3_r[j]*uu;
                  }
+            Ad_m[eqn1] = a1;
+            Ad_m[eqn2] = a2;
+            Ad_m[eqn3] = a3;
 
-            if (!(E->NODE[level][m][i]&OFFSIDE))   {
-               E->temp[m][eqn1] = (F[m][eqn1] - Ad[m][eqn1])*E->BI[level][m][eqn1];
-               E->temp[m][eqn2] = (F[m][eqn2] - Ad[m][eqn2])*E->BI[level][m][eqn2];
-               E->temp[m][eqn3] = (F[m][eqn3] - Ad[m][eqn3])*E->BI[level][m][eqn3];
-	       }
+            double t1, t2, t3;
+            if (!(NODE_m[i]&OFFSIDE))   {
+               t1 = (F_m[eqn1] - a1)*BI_m[eqn1];
+               t2 = (F_m[eqn2] - a2)*BI_m[eqn2];
+               t3 = (F_m[eqn3] - a3)*BI_m[eqn3];
+               temp_m[eqn1] = t1;
+               temp_m[eqn2] = t2;
+               temp_m[eqn3] = t3;
+	       } else {
+               t1 = temp_m[eqn1];
+               t2 = temp_m[eqn2];
+               t3 = temp_m[eqn3];
+               }
 
                  /* Ad on boundaries differs after the following operation */
 	    for(j=0;j<max_eqn;j++)
-		    Ad[m][C[j]]  += B1[j]*E->temp[m][eqn1]
-                                 +  B2[j]*E->temp[m][eqn2]
-                                 +  B3[j]*E->temp[m][eqn3];
+		    Ad_m[C_r[j]] += (double)B1_r[j]*t1
+                                 +  (double)B2_r[j]*t2
+                                 +  (double)B3_r[j]*t3;
 
-	    d0[m][eqn1] += E->temp[m][eqn1];
-	    d0[m][eqn2] += E->temp[m][eqn2];
-	    d0[m][eqn3] += E->temp[m][eqn3];
+	    d0_m[eqn1] += t1;
+	    d0_m[eqn2] += t2;
+	    d0_m[eqn3] += t3;
   	    }
+      }
 
       for (m=1;m<=E->sphere.caps_per_proc;m++)
  	for(i=1;i<=E->lmesh.NNO[level];i++)

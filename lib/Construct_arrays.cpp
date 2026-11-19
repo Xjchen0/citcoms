@@ -27,6 +27,8 @@
  */
 #include <math.h>
 #include <sys/types.h>
+#include <stdint.h>
+#include <vector>
 #include "element_definitions.h"
 #include "global_defs.h"
 
@@ -346,12 +348,50 @@ void construct_node_ks(struct All_variables *E)
     zero = 0.0;
     max_eqn = 14*dims;
 
+    /* Precomputed O(1) lookup table from (level, cap, element, i, j) -> Node_map offset for eqn1.
+     * Since Node_map is static and stores doff[1..3] consecutively at (idx, idx+1, idx+2),
+     * this eliminates 3x O(42) linear searches per (element, i, j) on every stiffness rebuild. */
+    static std::vector<uint8_t> ks_lut[MAX_LEVELS][NCS];
+    static int ks_lut_nel[MAX_LEVELS][NCS] = {{0}};
+
    for(level=E->mesh.gridmax;level>=E->mesh.gridmin;level--)   {
 
       for(m=1;m<=E->sphere.caps_per_proc;m++)     {
 
         neq=E->lmesh.NEQ[level];
         nel=E->lmesh.NEL[level];
+
+        if (ks_lut_nel[level][m] != nel) {
+            ks_lut[level][m].assign((size_t)nel * 64, (uint8_t)255);
+            for (element = 1; element <= nel; element++) {
+                uint8_t *lut_el = &ks_lut[level][m][(size_t)(element - 1) * 64];
+                for (i = 1; i <= ends; i++) {
+                    node = E->IEN[level][m][element].node[i];
+                    loc0 = (node - 1) * max_eqn;
+                    for (j = 1; j <= ends; j++) {
+                        node1 = E->IEN[level][m][element].node[j];
+                        if (node1 <= node) {
+                            eqn1 = E->ID[level][m][node1].doff[1];
+                            eqn2 = E->ID[level][m][node1].doff[2];
+                            eqn3 = E->ID[level][m][node1].doff[3];
+                            found = 0;
+                            for (k = 0; k < max_eqn; k += dims) {
+                                if (E->Node_map[level][m][loc0 + k] == eqn1 &&
+                                    E->Node_map[level][m][loc0 + k + 1] == eqn2 &&
+                                    E->Node_map[level][m][loc0 + k + 2] == eqn3) {
+                                    lut_el[(i - 1) * 8 + (j - 1)] = (uint8_t)k;
+                                    found = 1;
+                                    break;
+                                }
+                            }
+                            assert(found /* static Node_map LUT build */);
+                        }
+                    }
+                }
+            }
+            ks_lut_nel[level][m] = nel;
+        }
+
         //nno=E->lmesh.NNO[level];
 	for(i=0;i<neq;i++)
 	    E->BI[level][m][i] = zero;
@@ -360,6 +400,12 @@ void construct_node_ks(struct All_variables *E)
             E->Eqn_k2[level][m][i] = zero;
             E->Eqn_k3[level][m][i] = zero;
             }
+
+        higher_precision * __restrict__ ek1 = E->Eqn_k1[level][m];
+        higher_precision * __restrict__ ek2 = E->Eqn_k2[level][m];
+        higher_precision * __restrict__ ek3 = E->Eqn_k3[level][m];
+        const unsigned int * __restrict__ node_flags = E->NODE[level][m];
+        const uint8_t * __restrict__ lut_base = ks_lut[level][m].data();
 
         for(element=1;element<=nel;element++) {
 
@@ -370,84 +416,52 @@ void construct_node_ks(struct All_variables *E)
 
             build_diagonal_of_K(E,element,elt_K,level,m);
 
+            const uint8_t * __restrict__ lut_el = lut_base + (size_t)(element - 1) * 64;
+            const int * __restrict__ enodes_arr = E->IEN[level][m][element].node;
+
 	    for(i=1;i<=ends;i++) {  /* i, is the node we are storing to */
-	       node=E->IEN[level][m][element].node[i];
+	       node=enodes_arr[i];
 
 	       pp=(i-1)*dims;
 	       w1=w2=w3=1.0;
 
 	       loc0=(node-1)*max_eqn;
 
-	       if(E->NODE[level][m][node] & VBX) w1=0.0;
-	       if(E->NODE[level][m][node] & VBZ) w3=0.0;
-	       if(E->NODE[level][m][node] & VBY) w2=0.0;
+	       if(node_flags[node] & VBX) w1=0.0;
+	       if(node_flags[node] & VBZ) w3=0.0;
+	       if(node_flags[node] & VBY) w2=0.0;
+
+	       const uint8_t * __restrict__ lut_row = lut_el + (i - 1) * 8;
+	       const int p0 = pp * lms;
+	       const int p1 = (pp + 1) * lms;
+	       const int p2 = (pp + 2) * lms;
 
 	       for(j=1;j<=ends;j++) { /* j is the node we are receiving from */
-	         node1=E->IEN[level][m][element].node[j];
-
-                        /* only for half of the matrix ,because of the symmetry */
-                 if (node1<=node)  {
-
+	         const uint8_t idx = lut_row[j - 1];
+	         if (idx != 255)  {
+	            node1 = enodes_arr[j];
 		    ww1=ww2=ww3=1.0;
 		    qq=(j-1)*dims;
-		    eqn1=E->ID[level][m][node1].doff[1];
-		    eqn2=E->ID[level][m][node1].doff[2];
-		    eqn3=E->ID[level][m][node1].doff[3];
 
-		    if(E->NODE[level][m][node1] & VBX) ww1=0.0;
-		    if(E->NODE[level][m][node1] & VBZ) ww3=0.0;
-		    if(E->NODE[level][m][node1] & VBY) ww2=0.0;
+		    if(node_flags[node1] & VBX) ww1=0.0;
+		    if(node_flags[node1] & VBZ) ww3=0.0;
+		    if(node_flags[node1] & VBY) ww2=0.0;
 
-		    /* search for direction 1*/
-
-		    found=0;
-		    for(k=0;k<max_eqn;k++)
-		      if(E->Node_map[level][m][loc0+k] == eqn1) { /* found, index next equation */
-			    index=k;
-			    found++;
-			    break;
-			}
-
-		    assert(found /* direction 1 */);
-
-		    E->Eqn_k1[level][m][loc0+index] +=  w1*ww1*elt_K[pp*lms+qq]; /* direction 1 */
-		    E->Eqn_k2[level][m][loc0+index] +=  w2*ww1*elt_K[(pp+1)*lms+qq]; /* direction 1 */
-		    E->Eqn_k3[level][m][loc0+index] +=  w3*ww1*elt_K[(pp+2)*lms+qq]; /* direction 1 */
-
-		     /* search for direction 2*/
-
-		    found=0;
-		    for(k=0;k<max_eqn;k++)
-			if(E->Node_map[level][m][loc0+k] == eqn2) { /* found, index next equation */
-			    index=k;
-			    found++;
-			    break;
-			}
-
-		    assert(found /* direction 2 */);
-
-		    E->Eqn_k1[level][m][loc0+index] += w1*ww2*elt_K[pp*lms+qq+1]; /* direction 1 */
-		    E->Eqn_k2[level][m][loc0+index] += w2*ww2*elt_K[(pp+1)*lms+qq+1]; /* direction 2 */
-		    E->Eqn_k3[level][m][loc0+index] += w3*ww2*elt_K[(pp+2)*lms+qq+1]; /* direction 3 */
-
-		    /* search for direction 3*/
-
-                    found=0;
-		    for(k=0;k<max_eqn;k++)
-		    if(E->Node_map[level][m][loc0+k] == eqn3) { /* found, index next equation */
-			index=k;
-			found++;
-			break;
-		        }
-
-                    assert(found /* direction 3 */);
-
-		    E->Eqn_k1[level][m][loc0+index] += w1*ww3*elt_K[pp*lms+qq+2]; /* direction 1 */
-                    E->Eqn_k2[level][m][loc0+index] += w2*ww3*elt_K[(pp+1)*lms+qq+2]; /* direction 2 */
-		    E->Eqn_k3[level][m][loc0+index] += w3*ww3*elt_K[(pp+2)*lms+qq+2]; /* direction 3 */
-
-		    }   /* end for j */
-		  }   /* end for node1<= node */
+		    const int base = loc0 + (int)idx;
+		    /* direction 1 */
+		    ek1[base]     += (higher_precision)(w1*ww1*elt_K[p0+qq]);
+		    ek2[base]     += (higher_precision)(w2*ww1*elt_K[p1+qq]);
+		    ek3[base]     += (higher_precision)(w3*ww1*elt_K[p2+qq]);
+		    /* direction 2 */
+		    ek1[base + 1] += (higher_precision)(w1*ww2*elt_K[p0+qq+1]);
+		    ek2[base + 1] += (higher_precision)(w2*ww2*elt_K[p1+qq+1]);
+		    ek3[base + 1] += (higher_precision)(w3*ww2*elt_K[p2+qq+1]);
+		    /* direction 3 */
+		    ek1[base + 2] += (higher_precision)(w1*ww3*elt_K[p0+qq+2]);
+		    ek2[base + 2] += (higher_precision)(w2*ww3*elt_K[p1+qq+2]);
+		    ek3[base + 2] += (higher_precision)(w3*ww3*elt_K[p2+qq+2]);
+		    }   /* end if node1 <= node */
+		  }   /* end for j */
 		}      /* end for i */
 	    }            /* end for element */
 	}           /* end for m */

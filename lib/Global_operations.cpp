@@ -375,8 +375,13 @@ float return_bulk_value(struct All_variables *E, float **Z, int average)
           }
 
 
-    MPI_Allreduce(&volume1  ,&volume  ,1,MPI_FLOAT,MPI_SUM,E->parallel.world);
-    MPI_Allreduce(&integral1,&integral,1,MPI_FLOAT,MPI_SUM,E->parallel.world);
+    {
+        float loc[2] = {volume1, integral1};
+        float glob[2] = {0.0f, 0.0f};
+        MPI_Allreduce(loc, glob, 2, MPI_FLOAT, MPI_SUM, E->parallel.world);
+        volume = glob[0];
+        integral = glob[1];
+    }
 
     if(average && volume != 0.0)
  	   integral /= volume;
@@ -415,8 +420,13 @@ double return_bulk_value_d(struct All_variables *E, double **Z, int average)
        }
 
 
-    MPI_Allreduce(&volume1  ,&volume  ,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-    MPI_Allreduce(&integral1,&integral,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+    {
+        double loc[2] = {volume1, integral1};
+        double glob[2] = {0.0, 0.0};
+        MPI_Allreduce(loc, glob, 2, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+        volume = glob[0];
+        integral = glob[1];
+    }
 
     if(average && volume != 0.0)
            integral /= volume;
@@ -557,12 +567,16 @@ double global_vdot(struct All_variables *E, double **A, double **B, int lev)
 
   for (m=1;m<=E->sphere.caps_per_proc;m++)  {
     neq=E->lmesh.NEQ[lev];
+    const double * __restrict__ Am = A[m];
+    const double * __restrict__ Bm = B[m];
+    const int * __restrict__ skip = E->parallel.Skip_id[lev][m];
+    const int nskip = E->parallel.Skip_neq[lev][m];
     temp1 = 0.0;
     for (i=0;i<neq;i++)
-      temp += A[m][i]*B[m][i];
+      temp += Am[i]*Bm[i];
 
-    for (i=1;i<=E->parallel.Skip_neq[lev][m];i++)
-       temp1 += A[m][E->parallel.Skip_id[lev][m][i]]*B[m][E->parallel.Skip_id[lev][m][i]];
+    for (i=1;i<=nskip;i++)
+       temp1 += Am[skip[i]]*Bm[skip[i]];
 
     temp -= temp1;
 
@@ -571,6 +585,60 @@ double global_vdot(struct All_variables *E, double **A, double **B, int lev)
   MPI_Allreduce(&temp, &prod,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
 
   return (prod);
+}
+
+/* Fused dual inner product: computes <A, B> and <A, C> in one memory pass
+ * and a single MPI_Allreduce (cuts MG upward-sweep collective latency in half). */
+void global_vdot2(struct All_variables *E, double **A, double **B, double **C,
+                  int lev, double *ab_out, double *ac_out)
+{
+  int m, i, neq;
+  double local[2] = {0.0, 0.0};
+  double global[2] = {0.0, 0.0};
+
+  for (m=1; m<=E->sphere.caps_per_proc; m++) {
+    neq = E->lmesh.NEQ[lev];
+    const double * __restrict__ Am = A[m];
+    const double * __restrict__ Bm = B[m];
+    const double * __restrict__ Cm = C[m];
+    const int * __restrict__ skip = E->parallel.Skip_id[lev][m];
+    const int nskip = E->parallel.Skip_neq[lev][m];
+    double s1 = 0.0, s2 = 0.0;
+    double skip1 = 0.0, skip2 = 0.0;
+
+    if (A == B) {
+      for (i=0; i<neq; i++) {
+        const double a = Am[i];
+        s1 += a * a;
+        s2 += a * Cm[i];
+      }
+      for (i=1; i<=nskip; i++) {
+        const int idx = skip[i];
+        const double a = Am[idx];
+        skip1 += a * a;
+        skip2 += a * Cm[idx];
+      }
+    } else {
+      for (i=0; i<neq; i++) {
+        const double a = Am[i];
+        s1 += a * Bm[i];
+        s2 += a * Cm[i];
+      }
+      for (i=1; i<=nskip; i++) {
+        const int idx = skip[i];
+        const double a = Am[idx];
+        skip1 += a * Bm[idx];
+        skip2 += a * Cm[idx];
+      }
+    }
+
+    local[0] += (s1 - skip1);
+    local[1] += (s2 - skip2);
+  }
+
+  MPI_Allreduce(local, global, 2, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+  *ab_out = global[0];
+  *ac_out = global[1];
 }
 
 
@@ -585,8 +653,10 @@ double global_pdot(struct All_variables *E, double **A, double **B, int lev)
   prod = 0.0;
   for (m=1;m<=E->sphere.caps_per_proc;m++)  {
     npno=E->lmesh.NPNO[lev];
+    const double * __restrict__ Am = A[m];
+    const double * __restrict__ Bm = B[m];
     for (i=1;i<=npno;i++)
-      temp += A[m][i]*B[m][i];
+      temp += Am[i]*Bm[i];
     }
 
   MPI_Allreduce(&temp, &prod,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
@@ -661,6 +731,65 @@ double global_div_norm2(struct All_variables *E,  double **A)
     MPI_Allreduce(&temp, &prod, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
 
     return (prod/E->mesh.volume);
+}
+
+/* Fused 5-norm reduction for Stokes Uzawa iterations:
+ * out[0] = ||V||^2, out[1] = ||P||^2, out[2] = ||dV||^2,
+ * out[3] = ||dP||^2, out[4] = ||divV||^2 (replaces 5 separate MPI_Allreduce calls with 1). */
+void global_stokes_norms(struct All_variables *E,
+                         double **V, double **P,
+                         double **dV, double **dP,
+                         double **divV, double out[5])
+{
+    int i, m;
+    const int nno = E->lmesh.nno;
+    const int npno = E->lmesh.npno;
+    double local[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double global[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+
+    for (m=1; m<=E->sphere.caps_per_proc; m++) {
+        const double * __restrict__ Vm = V[m];
+        const double * __restrict__ dVm = dV[m];
+        const double * __restrict__ nmass = E->NMass[m];
+        const struct ID * __restrict__ idm = E->id[m];
+        double sv = 0.0, sdv = 0.0;
+        for (i=1; i<=nno; i++) {
+            const int e1 = idm[i].doff[1];
+            const int e2 = idm[i].doff[2];
+            const int e3 = idm[i].doff[3];
+            const double w = nmass[i];
+            const double v1 = Vm[e1], v2 = Vm[e2], v3 = Vm[e3];
+            const double u1 = dVm[e1], u2 = dVm[e2], u3 = dVm[e3];
+            sv  += (v1*v1 + v2*v2 + v3*v3) * w;
+            sdv += (u1*u1 + u2*u2 + u3*u3) * w;
+        }
+        local[0] += sv;
+        local[2] += sdv;
+
+        const double * __restrict__ Pm = P[m];
+        const double * __restrict__ dPm = dP[m];
+        const double * __restrict__ divm = divV[m];
+        const struct COORD * __restrict__ ecom = E->eco[m];
+        double sp = 0.0, sdp = 0.0, sdiv = 0.0;
+        for (i=1; i<=npno; i++) {
+            const double area = ecom[i].area;
+            const double p  = Pm[i];
+            const double dp = dPm[i];
+            const double dv = divm[i];
+            sp   += p * p * area;
+            sdp  += dp * dp * area;
+            sdiv += (dv * dv) / area;
+        }
+        local[1] += sp;
+        local[3] += sdp;
+        local[4] += sdiv;
+    }
+
+    MPI_Allreduce(local, global, 5, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+
+    const double inv_vol = 1.0 / E->mesh.volume;
+    for (i=0; i<5; i++)
+        out[i] = global[i] * inv_vol;
 }
 
 
@@ -781,8 +910,13 @@ for (m=1;m<=E->sphere.caps_per_proc;m++)
          }
 
 
-  MPI_Allreduce(&dtemp, &temp2,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
-  MPI_Allreduce(&temp, &temp1,1,MPI_DOUBLE,MPI_SUM,E->parallel.world);
+  {
+    double loc[2] = {dtemp, temp};
+    double glob[2] = {0.0, 0.0};
+    MPI_Allreduce(loc, glob, 2, MPI_DOUBLE, MPI_SUM, E->parallel.world);
+    temp2 = glob[0];
+    temp1 = glob[1];
+  }
 
   temp1 = sqrt(temp2/temp1);
 

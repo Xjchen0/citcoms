@@ -32,9 +32,19 @@
 #include <math.h>
 #include <string.h>
 #include <sys/types.h>
+#include <stdlib.h>
+#include <vector>
 #include "element_definitions.h"
 #include "global_defs.h"
-#include <stdlib.h>
+
+namespace {
+inline double* ensure_buf(std::vector<double>& vec, size_t n) {
+    if (vec.size() < n) {
+        vec.resize(n);
+    }
+    return vec.data();
+}
+} // namespace
 
 void myerror(struct All_variables *E, const char *message);
 
@@ -219,14 +229,15 @@ static void solve_Ahat_p_fhat_CG(struct All_variables *E,
     neq = E->lmesh.neq;
     lev = E->mesh.levmax;
 
+    static std::vector<double> ws_F[NCS], ws_r1[NCS], ws_r2[NCS], ws_z1[NCS], ws_s1[NCS], ws_s2[NCS], ws_cu[NCS];
     for (m=1; m<=E->sphere.caps_per_proc; m++)   {
-        F[m] = (double *)malloc(neq*sizeof(double));
-        r1[m] = (double *)malloc((npno+1)*sizeof(double));
-        r2[m] = (double *)malloc((npno+1)*sizeof(double));
-        z1[m] = (double *)malloc((npno+1)*sizeof(double));
-        s1[m] = (double *)malloc((npno+1)*sizeof(double));
-        s2[m] = (double *)malloc((npno+1)*sizeof(double));
-        cu[m] = (double *)malloc((npno+1)*sizeof(double));
+        F[m]  = ensure_buf(ws_F[m],  (size_t)neq);
+        r1[m] = ensure_buf(ws_r1[m], (size_t)(npno+1));
+        r2[m] = ensure_buf(ws_r2[m], (size_t)(npno+1));
+        z1[m] = ensure_buf(ws_z1[m], (size_t)(npno+1));
+        s1[m] = ensure_buf(ws_s1[m], (size_t)(npno+1));
+        s2[m] = ensure_buf(ws_s2[m], (size_t)(npno+1));
+        cu[m] = ensure_buf(ws_cu[m], (size_t)(npno+1));
     }
 
     time0 = CPU_time0();
@@ -350,24 +361,25 @@ static void solve_Ahat_p_fhat_CG(struct All_variables *E,
                 V[m][j] -= alpha * E->u1[m][j];
 
 
-        /* compute velocity and incompressibility residual */
-        E->monitor.vdotv = global_v_norm2(E, V);
-        E->monitor.pdotp = global_p_norm2(E, P);
-        v_norm = sqrt(E->monitor.vdotv);
-        p_norm = sqrt(E->monitor.pdotp);
-        dvelocity = alpha * sqrt(global_v_norm2(E, E->u1) / (1e-32 + E->monitor.vdotv));
-        dpressure = alpha * sqrt(global_p_norm2(E, s2) / (1e-32 + E->monitor.pdotp));
-
-       
-
+        /* compute velocity, pressure, delta, and incompressibility residuals in 1 fused MPI_Allreduce */
         assemble_div_u(E, V, z1, lev);
         if(E->control.inv_gruneisen != 0)
             for(m=1;m<=E->sphere.caps_per_proc;m++)
                 for(j=1;j<=npno;j++) {
                     z1[m][j] += cu[m][j];
             }
-        E->monitor.incompressibility = sqrt(global_div_norm2(E, z1)
-                                            / (1e-32 + E->monitor.vdotv));
+
+        {
+            double norms[5];
+            global_stokes_norms(E, V, P, E->u1, s2, z1, norms);
+            E->monitor.vdotv = norms[0];
+            E->monitor.pdotp = norms[1];
+            v_norm = sqrt(norms[0]);
+            p_norm = sqrt(norms[1]);
+            dvelocity = alpha * sqrt(norms[2] / (1e-32 + norms[0]));
+            dpressure = alpha * sqrt(norms[3] / (1e-32 + norms[1]));
+            E->monitor.incompressibility = sqrt(norms[4] / (1e-32 + norms[0]));
+        }
 
         count++;
 
@@ -433,16 +445,7 @@ static void solve_Ahat_p_fhat_CG(struct All_variables *E,
             }
 
 
-    for(m=1; m<=E->sphere.caps_per_proc; m++) {
-        free((void *) F[m]);
-        free((void *) r1[m]);
-        free((void *) r2[m]);
-        free((void *) z1[m]);
-        free((void *) s1[m]);
-        free((void *) s2[m]);
-        free((void *) cu[m]);
-    }
-
+    /* Persistent workspace retained across timesteps */
     *steps_max=count;
 
     return;
@@ -491,20 +494,21 @@ static void solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     neq = E->lmesh.neq;
     lev = E->mesh.levmax;
 
+    static std::vector<double> ws_F[NCS], ws_r1[NCS], ws_r2[NCS], ws_pt[NCS], ws_p1[NCS], ws_p2[NCS];
+    static std::vector<double> ws_rt[NCS], ws_v0[NCS], ws_s0[NCS], ws_st[NCS], ws_t0[NCS], ws_u0[NCS];
     for (m=1; m<=E->sphere.caps_per_proc; m++)   {
-        F[m] = (double *)malloc(neq*sizeof(double));
-        r1[m] = (double *)malloc((npno+1)*sizeof(double));
-        r2[m] = (double *)malloc((npno+1)*sizeof(double));
-        pt[m] = (double *)malloc((npno+1)*sizeof(double));
-        p1[m] = (double *)malloc((npno+1)*sizeof(double));
-        p2[m] = (double *)malloc((npno+1)*sizeof(double));
-        rt[m] = (double *)malloc((npno+1)*sizeof(double));
-        v0[m] = (double *)malloc((npno+1)*sizeof(double));
-        s0[m] = (double *)malloc((npno+1)*sizeof(double));
-        st[m] = (double *)malloc((npno+1)*sizeof(double));
-        t0[m] = (double *)malloc((npno+1)*sizeof(double));
-
-        u0[m] = (double *)malloc(neq*sizeof(double));
+        F[m]  = ensure_buf(ws_F[m],  (size_t)neq);
+        r1[m] = ensure_buf(ws_r1[m], (size_t)(npno+1));
+        r2[m] = ensure_buf(ws_r2[m], (size_t)(npno+1));
+        pt[m] = ensure_buf(ws_pt[m], (size_t)(npno+1));
+        p1[m] = ensure_buf(ws_p1[m], (size_t)(npno+1));
+        p2[m] = ensure_buf(ws_p2[m], (size_t)(npno+1));
+        rt[m] = ensure_buf(ws_rt[m], (size_t)(npno+1));
+        v0[m] = ensure_buf(ws_v0[m], (size_t)(npno+1));
+        s0[m] = ensure_buf(ws_s0[m], (size_t)(npno+1));
+        st[m] = ensure_buf(ws_st[m], (size_t)(npno+1));
+        t0[m] = ensure_buf(ws_t0[m], (size_t)(npno+1));
+        u0[m] = ensure_buf(ws_u0[m], (size_t)neq);
     }
 
     time0 = CPU_time0();
@@ -661,20 +665,19 @@ static void solve_Ahat_p_fhat_BiCG(struct All_variables *E,
                 V[m][j] -= F[m][j];
 
 
-        /* compute velocity and incompressibility residual */
-        E->monitor.vdotv = global_v_norm2(E, V);
-        E->monitor.pdotp = global_p_norm2(E, P);
-        v_norm = sqrt(E->monitor.vdotv);
-        p_norm = sqrt(E->monitor.pdotp);
-        dvelocity = sqrt(global_v_norm2(E, F) / (1e-32 + E->monitor.vdotv));
-        dpressure = sqrt(global_p_norm2(E, s0) / (1e-32 + E->monitor.pdotp));
-
-
-	
-
+        /* compute velocity, pressure, delta, and incompressibility residuals in 1 fused MPI_Allreduce */
         assemble_div_rho_u(E, V, t0, lev);
-        E->monitor.incompressibility = sqrt(global_div_norm2(E, t0)
-                                            / (1e-32 + E->monitor.vdotv));
+        {
+            double norms[5];
+            global_stokes_norms(E, V, P, F, s0, t0, norms);
+            E->monitor.vdotv = norms[0];
+            E->monitor.pdotp = norms[1];
+            v_norm = sqrt(norms[0]);
+            p_norm = sqrt(norms[1]);
+            dvelocity = sqrt(norms[2] / (1e-32 + norms[0]));
+            dpressure = sqrt(norms[3] / (1e-32 + norms[1]));
+            E->monitor.incompressibility = sqrt(norms[4] / (1e-32 + norms[0]));
+        }
 
 
 
@@ -726,22 +729,7 @@ static void solve_Ahat_p_fhat_BiCG(struct All_variables *E,
     } /* end loop for conjugate gradient */
 
 
-    for(m=1; m<=E->sphere.caps_per_proc; m++) {
-    	free((void *) F[m]);
-        free((void *) r1[m]);
-        free((void *) r2[m]);
-        free((void *) pt[m]);
-        free((void *) p1[m]);
-        free((void *) p2[m]);
-        free((void *) rt[m]);
-        free((void *) v0[m]);
-        free((void *) s0[m]);
-        free((void *) st[m]);
-        free((void *) t0[m]);
-
-        free((void *) u0[m]);
-    }
-
+    /* Persistent workspace retained across timesteps */
     *steps_max=count;
 
     return;

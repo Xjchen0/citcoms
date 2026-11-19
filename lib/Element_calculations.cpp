@@ -521,35 +521,49 @@ void n_assemble_del2_u(struct All_variables *E, double **u, double **Au, int lev
 
 
   for (m=1;m<=E->sphere.caps_per_proc;m++)  {
+     double * __restrict__ Au_m = Au[m];
+     double * __restrict__ u_m = u[m];
+     const struct ID * __restrict__ ID_m = E->ID[level][m];
+     const int * __restrict__ nmap_base = E->Node_map[level][m];
+     const higher_precision * __restrict__ ek1_base = E->Eqn_k1[level][m];
+     const higher_precision * __restrict__ ek2_base = E->Eqn_k2[level][m];
+     const higher_precision * __restrict__ ek3_base = E->Eqn_k3[level][m];
 
      for(e=0;e<=neq;e++)
-	Au[m][e]=0.0;
+	Au_m[e]=0.0;
 
-     u[m][neq] = 0.0;
+     u_m[neq] = 0.0;
 
      for(e=1;e<=nno;e++)     {
 
-       eqn1=E->ID[level][m][e].doff[1];
-       eqn2=E->ID[level][m][e].doff[2];
-       eqn3=E->ID[level][m][e].doff[3];
+       eqn1=ID_m[e].doff[1];
+       eqn2=ID_m[e].doff[2];
+       eqn3=ID_m[e].doff[3];
 
-       U1 = u[m][eqn1];
-       U2 = u[m][eqn2];
-       U3 = u[m][eqn3];
+       U1 = u_m[eqn1];
+       U2 = u_m[eqn2];
+       U3 = u_m[eqn3];
 
-       C=E->Node_map[level][m] + (e-1)*max_eqn;
-       B1=E->Eqn_k1[level][m]+(e-1)*max_eqn;
-       B2=E->Eqn_k2[level][m]+(e-1)*max_eqn;
-       B3=E->Eqn_k3[level][m]+(e-1)*max_eqn;
+       const size_t row_off = (size_t)(e-1)*max_eqn;
+       const int * __restrict__ C_r = nmap_base + row_off;
+       const higher_precision * __restrict__ B1_r = ek1_base + row_off;
+       const higher_precision * __restrict__ B2_r = ek2_base + row_off;
+       const higher_precision * __restrict__ B3_r = ek3_base + row_off;
 
+       double a1 = Au_m[eqn1];
+       double a2 = Au_m[eqn2];
+       double a3 = Au_m[eqn3];
        for(i=3;i<max_eqn;i++)  {
-	  UU = u[m][C[i]];
-  	  Au[m][eqn1] += B1[i]*UU;
-  	  Au[m][eqn2] += B2[i]*UU;
-  	  Au[m][eqn3] += B3[i]*UU;
+	  const double uu = u_m[C_r[i]];
+  	  a1 += (double)B1_r[i]*uu;
+  	  a2 += (double)B2_r[i]*uu;
+  	  a3 += (double)B3_r[i]*uu;
        }
+       Au_m[eqn1] = a1;
+       Au_m[eqn2] = a2;
+       Au_m[eqn3] = a3;
        for(i=0;i<max_eqn;i++)
-          Au[m][C[i]] += B1[i]*U1+B2[i]*U2+B3[i]*U3;
+          Au_m[C_r[i]] += (double)B1_r[i]*U1 + (double)B2_r[i]*U2 + (double)B3_r[i]*U3;
 
        }     /* end for e */
      }     /* end for m */
@@ -638,21 +652,29 @@ void assemble_c_u(struct All_variables *E,
     const int nel = E->lmesh.NEL[level];
     const int ends = enodes[E->mesh.nsd];
     const int dims = E->mesh.nsd;
-    const int npno = E->lmesh.NPNO[level];
 
-    for(m=1;m<=E->sphere.caps_per_proc;m++)
-        for(a=1;a<=ends;a++) {
-            p = (a-1)*dims;
-            for(e=1;e<=nel;e++) {
-                b = E->IEN[level][m][e].node[a];
-                j1= E->ID[level][m][b].doff[1];
-                j2= E->ID[level][m][b].doff[2];
-                j3= E->ID[level][m][b].doff[3];
-                result[m][e] += E->elt_c[level][m][e].c[p  ][0] * U[m][j1]
-                              + E->elt_c[level][m][e].c[p+1][0] * U[m][j2]
-                              + E->elt_c[level][m][e].c[p+2][0] * U[m][j3];
+    for(m=1;m<=E->sphere.caps_per_proc;m++) {
+        const double * __restrict__ Um = U[m];
+        double * __restrict__ res_m = result[m];
+        const struct IEN * __restrict__ ien_m = E->IEN[level][m];
+        const struct ID * __restrict__ id_m = E->ID[level][m];
+        const struct EC * __restrict__ ec_m = E->elt_c[level][m];
+        for(e=1;e<=nel;e++) {
+            double sum = res_m[e];
+            const int * __restrict__ nodes = ien_m[e].node;
+            for(a=1;a<=ends;a++) {
+                p = (a-1)*dims;
+                b = nodes[a];
+                j1 = id_m[b].doff[1];
+                j2 = id_m[b].doff[2];
+                j3 = id_m[b].doff[3];
+                sum += (double)ec_m[e].c[p  ][0] * Um[j1]
+                     + (double)ec_m[e].c[p+1][0] * Um[j2]
+                     + (double)ec_m[e].c[p+2][0] * Um[j3];
             }
+            res_m[e] = sum;
         }
+    }
 
     return;
 }
@@ -689,23 +711,31 @@ void assemble_div_u(struct All_variables *E,
     const int dims=E->mesh.nsd;
     const int npno=E->lmesh.NPNO[level];
 
-  for(m=1;m<=E->sphere.caps_per_proc;m++)
-    for(e=1;e<=npno;e++)
-	divU[m][e] = 0.0;
+  for(m=1;m<=E->sphere.caps_per_proc;m++) {
+    const double * __restrict__ Um = U[m];
+    double * __restrict__ div_m = divU[m];
+    const struct IEN * __restrict__ ien_m = E->IEN[level][m];
+    const struct ID * __restrict__ id_m = E->ID[level][m];
+    const struct EG * __restrict__ eg_m = E->elt_del[level][m];
 
-  for(m=1;m<=E->sphere.caps_per_proc;m++)
-       for(a=1;a<=ends;a++)   {
-	  p = (a-1)*dims;
-          for(e=1;e<=nel;e++) {
-	    b = E->IEN[level][m][e].node[a];
-	    j1= E->ID[level][m][b].doff[1];
-            j2= E->ID[level][m][b].doff[2];
-	    j3= E->ID[level][m][b].doff[3];
-	    divU[m][e] += E->elt_del[level][m][e].g[p  ][0] * U[m][j1]
-	                + E->elt_del[level][m][e].g[p+1][0] * U[m][j2]
-	                + E->elt_del[level][m][e].g[p+2][0] * U[m][j3];
-	    }
-	 }
+    for(e=1;e<=nel;e++) {
+      double sum = 0.0;
+      const int * __restrict__ nodes = ien_m[e].node;
+      for(a=1;a<=ends;a++)   {
+        p = (a-1)*dims;
+        b = nodes[a];
+        j1= id_m[b].doff[1];
+        j2= id_m[b].doff[2];
+        j3= id_m[b].doff[3];
+        sum += (double)eg_m[e].g[p  ][0] * Um[j1]
+             + (double)eg_m[e].g[p+1][0] * Um[j2]
+             + (double)eg_m[e].g[p+2][0] * Um[j3];
+      }
+      div_m[e] = sum;
+    }
+    for(e=nel+1;e<=npno;e++)
+      div_m[e] = 0.0;
+  }
 
     return;
 }
@@ -728,24 +758,30 @@ void assemble_grad_p(struct All_variables *E, double **P, double **gradP, int le
     nel=E->lmesh.NEL[lev];
     neq=E->lmesh.NEQ[lev];
 
+    double * __restrict__ gP_m = gradP[m];
+    const double * __restrict__ P_m = P[m];
+    const struct IEN * __restrict__ ien_m = E->IEN[lev][m];
+    const struct ID * __restrict__ id_m = E->ID[lev][m];
+    const struct EG * __restrict__ eg_m = E->elt_del[lev][m];
+
     for(i=0;i<neq;i++)
-      gradP[m][i] = 0.0;
+      gP_m[i] = 0.0;
 
     for(e=1;e<=nel;e++) {
-
-	if(0.0==P[m][e])
+	const double pe = P_m[e];
+	if(0.0 == pe)
 	    continue;
 
+	const int * __restrict__ nodes = ien_m[e].node;
 	for(a=1;a<=ends;a++)       {
 	     p = (a-1)*dims;
-	     b = E->IEN[lev][m][e].node[a];
-	     j1= E->ID[lev][m][b].doff[1];
-	     j2= E->ID[lev][m][b].doff[2];
-	     j3= E->ID[lev][m][b].doff[3];
-		        /*for(b=0;b<ploc_mat_size[E->mesh.nsd];b++)  */
-             gradP[m][j1] += E->elt_del[lev][m][e].g[p  ][0] * P[m][e];
-             gradP[m][j2] += E->elt_del[lev][m][e].g[p+1][0] * P[m][e];
-             gradP[m][j3] += E->elt_del[lev][m][e].g[p+2][0] * P[m][e];
+	     b = nodes[a];
+	     j1= id_m[b].doff[1];
+	     j2= id_m[b].doff[2];
+	     j3= id_m[b].doff[3];
+             gP_m[j1] += (double)eg_m[e].g[p  ][0] * pe;
+             gP_m[j2] += (double)eg_m[e].g[p+1][0] * pe;
+             gP_m[j3] += (double)eg_m[e].g[p+2][0] * pe;
 	     }
         }       /* end for el */
      }       /* end for m */
