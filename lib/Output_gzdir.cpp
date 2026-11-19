@@ -85,7 +85,7 @@ void calc_cbase_at_node(int , int , float *,struct All_variables *);
 /*  */
 void get_vtk_filename(char *,int,struct All_variables *,int);
 
-gzFile gzdir_output_open(char *,char *);
+gzFile gzdir_output_open(const char *, const char *);
 
 void gzdir_output(struct All_variables *, int );
 void gzdir_output_comp_nd(struct All_variables *, int);
@@ -227,7 +227,7 @@ void gzdir_output(struct All_variables *E, int out_cycles)
 }
 
 
-gzFile gzdir_output_open(char *filename,char *mode)
+gzFile gzdir_output_open(const char *filename, const char *mode)
 {
   gzFile fp1;
 
@@ -1724,8 +1724,8 @@ void be_flip_byte_order(void *x, size_t len)
 /* this should not be called with (i,i,size i) */
 void be_flipit(void *d, void *s, size_t len)
 {
-  unsigned char *dest = d;
-  unsigned char *src  = s;
+  unsigned char *dest = (unsigned char *)d;
+  unsigned char *src  = (unsigned char *)s;
   src += len - 1;
   for (; len; len--)
     *dest++ = *src--;

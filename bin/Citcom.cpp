@@ -216,6 +216,17 @@ int main(int argc, char **argv)
     else
       E->control.keep_going = 0;
 
+    int reached_end_age = 0;
+    if (E->control.end_time > 0.0 &&
+        E->monitor.elapsed_time >= E->control.end_time - 1.0e-7 * E->control.end_time) {
+      E->control.keep_going = 0;
+      reached_end_age = 1;
+      if (E->parallel.me == 0) {
+        fprintf(stderr, "\n>>> Reached geological age endpoint: %.4f Myr (dimensionless elapsed_time = %.6e). Terminating.\n",
+                E->monitor.elapsed_time * (E->data.scalet > 0.0 ? E->data.scalet : 1.0), E->monitor.elapsed_time);
+      }
+    }
+
     cpu_total_seconds = CPU_time0()-start_time;
     if (cpu_total_seconds > E->control.record_all_until)  {
       E->control.keep_going = 0;
@@ -233,7 +244,7 @@ int main(int argc, char **argv)
     if(E->output.write_q_files)
       if ((E->monitor.solution_cycles % E->output.write_q_files)==0)
 	heat_flux(E);
-    /* 1. Field output triggering (Step-based or Model Time/Age-based) */
+    /* 1. Field output triggering (Step-based or Model Time/Age-based or Termination) */
     do_field_output = 0;
     if (E->control.record_every > 0 && (E->monitor.solution_cycles % E->control.record_every) == 0) {
         do_field_output = 1;
@@ -244,6 +255,9 @@ int main(int argc, char **argv)
         while (E->control.next_storage_time <= E->monitor.elapsed_time + 1.0e-4 * E->control.storage_interval_time) {
             E->control.next_storage_time += E->control.storage_interval_time;
         }
+    }
+    if (reached_end_age) {
+        do_field_output = 1;
     }
     if (do_field_output) {
 	(E->problem_output)(E, E->monitor.solution_cycles);

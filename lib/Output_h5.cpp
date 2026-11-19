@@ -655,7 +655,7 @@ void h5output_coord(struct All_variables *E)
     my = field->block[2];
     mz = field->block[3];
 
-    /* prepare the data -- change citcom yxz order to xyz order */
+    /* 1. Write true Cartesian coordinates (X, Y, Z) into /coord for ParaView 3D visualization */
     for(i = 0; i < mx; i++)
     {
         for(j = 0; j < my; j++)
@@ -664,20 +664,37 @@ void h5output_coord(struct All_variables *E)
             {
                 n = k + i*nz + j*nz*nx;
                 m = k + j*mz + i*mz*my;
-                field->data[3*m+0] = E->sx[1][1][n+1];
-                field->data[3*m+1] = E->sx[1][2][n+1];
-                field->data[3*m+2] = E->sx[1][3][n+1];
+                field->data[3*m+0] = (float)E->x[1][1][n+1];
+                field->data[3*m+1] = (float)E->x[1][2][n+1];
+                field->data[3*m+2] = (float)E->x[1][3][n+1];
             }
         }
     }
 
-    h5create_field(E->hdf5.file_id, field, "coord", "coordinates of nodes");
-
-    /* write to dataset */
+    h5create_field(E->hdf5.file_id, field, "coord", "Cartesian coordinates (X, Y, Z) of nodes");
     dataset = H5Dopen(E->hdf5.file_id, "/coord");
     status  = h5write_field(dataset, field, 1, 1);
+    status = H5Dclose(dataset);
 
-    /* release resources */
+    /* 2. Also write spherical coordinates (theta, phi, r) into /coord_rtp for scientific scripts */
+    for(i = 0; i < mx; i++)
+    {
+        for(j = 0; j < my; j++)
+        {
+            for(k = 0; k < mz; k++)
+            {
+                n = k + i*nz + j*nz*nx;
+                m = k + j*mz + i*mz*my;
+                field->data[3*m+0] = (float)E->sx[1][1][n+1];
+                field->data[3*m+1] = (float)E->sx[1][2][n+1];
+                field->data[3*m+2] = (float)E->sx[1][3][n+1];
+            }
+        }
+    }
+
+    h5create_field(E->hdf5.file_id, field, "coord_rtp", "Spherical coordinates (theta, phi, r) of nodes");
+    dataset = H5Dopen(E->hdf5.file_id, "/coord_rtp");
+    status  = h5write_field(dataset, field, 1, 1);
     status = H5Dclose(dataset);
 }
 
@@ -690,6 +707,7 @@ void h5output_velocity(struct All_variables *E, int cycles)
     int i, j, k;
     int n, nx, ny, nz;
     int m, mx, my, mz;
+    const int lev = E->mesh.levmax;
 
     field = E->hdf5.vector3d;
 
@@ -701,7 +719,7 @@ void h5output_velocity(struct All_variables *E, int cycles)
     my = field->block[2];
     mz = field->block[3];
 
-    /* prepare the data -- change citcom yxz order to xyz order */
+    /* 1. Write true Cartesian velocity components (vx, vy, vz) into /velocity for ParaView 3D glyphs/streamlines */
     for(i = 0; i < mx; i++)
     {
         for(j = 0; j < my; j++)
@@ -710,20 +728,47 @@ void h5output_velocity(struct All_variables *E, int cycles)
             {
                 n = k + i*nz + j*nz*nx;
                 m = k + j*mz + i*mz*my;
-                field->data[3*m+0] = E->sphere.cap[1].V[1][n+1];
-                field->data[3*m+1] = E->sphere.cap[1].V[2][n+1];
-                field->data[3*m+2] = E->sphere.cap[1].V[3][n+1];
+
+                double sint = E->SinCos[lev][1][0][n+1];
+                double sinf = E->SinCos[lev][1][1][n+1];
+                double cost = E->SinCos[lev][1][2][n+1];
+                double cosf = E->SinCos[lev][1][3][n+1];
+
+                double v1 = E->sphere.cap[1].V[1][n+1]; /* v_theta */
+                double v2 = E->sphere.cap[1].V[2][n+1]; /* v_phi */
+                double v3 = E->sphere.cap[1].V[3][n+1]; /* v_r */
+
+                field->data[3*m+0] = (float)(v1*cost*cosf - v2*sinf + v3*sint*cosf);
+                field->data[3*m+1] = (float)(v1*cost*sinf + v2*cosf + v3*sint*sinf);
+                field->data[3*m+2] = (float)(-v1*sint + v3*cost);
             }
         }
     }
 
-    h5create_field(E->hdf5.file_id, field, "velocity", "velocity values on nodes");
-
-    /* write to dataset */
+    h5create_field(E->hdf5.file_id, field, "velocity", "Cartesian velocity (vx, vy, vz) on nodes");
     dataset = H5Dopen(E->hdf5.file_id, "/velocity");
     status  = h5write_field(dataset, field, 1, 1);
+    status = H5Dclose(dataset);
 
-    /* release resources */
+    /* 2. Also write spherical velocity components (v_theta, v_phi, v_r) into /velocity_rtp for scientific scripts */
+    for(i = 0; i < mx; i++)
+    {
+        for(j = 0; j < my; j++)
+        {
+            for(k = 0; k < mz; k++)
+            {
+                n = k + i*nz + j*nz*nx;
+                m = k + j*mz + i*mz*my;
+                field->data[3*m+0] = (float)E->sphere.cap[1].V[1][n+1];
+                field->data[3*m+1] = (float)E->sphere.cap[1].V[2][n+1];
+                field->data[3*m+2] = (float)E->sphere.cap[1].V[3][n+1];
+            }
+        }
+    }
+
+    h5create_field(E->hdf5.file_id, field, "velocity_rtp", "Spherical velocity (v_theta, v_phi, v_r) on nodes");
+    dataset = H5Dopen(E->hdf5.file_id, "/velocity_rtp");
+    status  = h5write_field(dataset, field, 1, 1);
     status = H5Dclose(dataset);
 }
 

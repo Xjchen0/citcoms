@@ -107,6 +107,24 @@ void output_common_input(struct All_variables *E)
             }
             parallel_process_termination();
         }
+
+        /* VTK output mode: "cap" (default: 12 caps in full sphere, 1 in regional),
+           "proc" (legacy: 1 file per MPI rank), or "single" (1 monolithic file per timestep) */
+        input_string("vtk_output_mode", E->output.vtk_output_mode, "cap", m);
+        input_string("vtk_split_mode", E->output.vtk_output_mode, E->output.vtk_output_mode, m);
+        if (strcmp(E->output.vtk_output_mode, "unified") == 0 ||
+            strcmp(E->output.vtk_output_mode, "monolithic") == 0 ||
+            strcmp(E->output.vtk_output_mode, "all") == 0) {
+            strcpy(E->output.vtk_output_mode, "single");
+        }
+        if (strcmp(E->output.vtk_output_mode, "proc") != 0 &&
+            strcmp(E->output.vtk_output_mode, "cap") != 0 &&
+            strcmp(E->output.vtk_output_mode, "single") != 0) {
+            if (E->parallel.me == 0) {
+                fprintf(stderr, "Warning: Unknown vtk_output_mode '%s', defaulting to 'cap'.\n", E->output.vtk_output_mode);
+            }
+            strcpy(E->output.vtk_output_mode, "cap");
+        }
     }
 }
 

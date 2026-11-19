@@ -694,6 +694,11 @@ void read_initial_settings(struct All_variables *E)
       input_float("storage_interval_time", &(E->control.storage_interval_time), "0.0", m);
       input_boolean("exact_time_output", &(E->control.exact_time_output), "on", m);
 
+      /* Simulation termination endpoints (geological age in Myr or dimensionless time) */
+      input_float("end_age_myr", &(E->control.end_age_myr), "0.0", m);
+      input_float("end_time_myr", &(E->control.end_age_myr), "0.0", m);
+      input_double("end_time", &(E->control.end_time), "0.0", m);
+
       input_float("checkpoint_interval_myr", &(E->control.checkpoint_interval_myr), "0.0", m);
       input_float("checkpoint_interval_time", &(E->control.checkpoint_interval_time), "0.0", m);
       input_float("checkpoint_walltime", &(E->control.checkpoint_walltime), "0.0", m);
@@ -900,7 +905,7 @@ void check_settings_consistency(struct All_variables *E)
     }
 
     if (strcmp(E->output.vtk_format, "binary") == 0) {
-#ifndef USE_GZDIR
+#if !defined(USE_GZDIR) && !defined(USE_ZLIB)
         /* zlib is required for vtk binary output */
         if(E->parallel.me == 0) {
             fputs("VTK binary output requires zlib, but couldn't find it at 'configure' time. Please either use VTK ascii output or re-run 'configure' with suitable flags.\n", stderr);
@@ -998,6 +1003,19 @@ void global_derived_values(struct All_variables *E)
                 fprintf(stderr, "Checkpoint interval: %g Myr (dimensionless dt = %g)\n",
                         E->control.checkpoint_interval_myr, E->control.checkpoint_interval_time);
         }
+    }
+
+    /* Convert termination age (end_age_myr) to dimensionless end_time */
+    if (E->control.end_age_myr > 0.0) {
+        if (E->data.scalet > 0.0) {
+            E->control.end_time = (double)E->control.end_age_myr / (double)E->data.scalet;
+            if (E->parallel.me == 0)
+                fprintf(stderr, "Termination age endpoint: %g Myr (dimensionless end_time = %.6e)\n",
+                        E->control.end_age_myr, E->control.end_time);
+        }
+    } else if (E->control.end_time > 0.0 && E->parallel.me == 0) {
+        fprintf(stderr, "Termination time endpoint: dimensionless end_time = %.6e (%.4f Myr)\n",
+                E->control.end_time, E->control.end_time * (E->data.scalet > 0.0 ? (double)E->data.scalet : 1.0));
     }
 
     update_next_output_times(E);

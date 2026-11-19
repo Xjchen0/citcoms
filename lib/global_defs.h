@@ -591,6 +591,10 @@ struct CONTROL {
     float checkpoint_walltime;       /* Wall-clock checkpoint interval (seconds) */
     double last_checkpoint_walltime; /* Last wall-clock time checkpoint was saved */
 
+    /* Geological age termination condition */
+    float end_age_myr;               /* Simulation termination endpoint in Myr */
+    double end_time;                 /* Simulation termination endpoint in non-dimensional time */
+
     /* Sliding window pruning, crash safety & auto-restart */
     int checkpoints_to_keep;         /* Number of recent checkpoints to keep (0=unlimited) */
     int checkpoint_on_termination;   /* Force checkpoint right before program exit */
@@ -673,6 +677,7 @@ struct Output {
     char optional_vtk[1000];
     char optional_h5[1000];
     char vtk_format[10]; /*ascii or binary */
+    char vtk_output_mode[20]; /* proc, cap, or single */
 
     int llmax;  /* max degree of spherical harmonics output */
 

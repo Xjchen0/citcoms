@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(citcoms_cpp VERSION 0.1.0 LANGUAGES CXX)
+project(citcoms_cpp VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,10 +13,17 @@ endif()
 # MPI is required for CitcomS
 find_package(MPI REQUIRED)
 
+# ZLIB (required for compressed VTK binary and gzdir output)
+find_package(ZLIB)
+if(ZLIB_FOUND)
+    message(STATUS "ZLIB found: enabling compressed binary VTK output (-DUSE_ZLIB).")
+    add_definitions(-DUSE_ZLIB)
+endif()
+
 # Optional packages
 find_package(OpenMP)
 
-option(ENABLE_HDF5 "Enable HDF5 parallel I/O support" OFF)
+option(ENABLE_HDF5 "Enable HDF5 parallel I/O support" ON)
 if(ENABLE_HDF5)
     find_package(HDF5 COMPONENTS C)
     if(HDF5_FOUND)
@@ -52,7 +59,6 @@ set(CITCOMS_LIB_SOURCES
     lib/Mineral_physics_models.cpp
     lib/Nodal_mesh.cpp
     lib/Output.cpp
-    lib/Output_gzdir.cpp
     lib/Output_h5.cpp
     lib/Output_vtk.cpp
     lib/Pan_problem_misc_functions.cpp
@@ -94,6 +100,9 @@ set(CITCOMS_LIB_SOURCES
 add_library(CitcomS STATIC ${CITCOMS_LIB_SOURCES})
 target_include_directories(CitcomS PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 target_link_libraries(CitcomS PUBLIC MPI::MPI_CXX)
+if(ZLIB_FOUND)
+    target_link_libraries(CitcomS PUBLIC ZLIB::ZLIB)
+endif()
 if(ENABLE_HDF5 AND HDF5_FOUND)
     target_link_libraries(CitcomS PUBLIC ${HDF5_LIBRARIES})
 endif()

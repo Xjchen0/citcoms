@@ -36,7 +36,7 @@
 #include "output.h"
 #include "string.h"
 
-#ifdef USE_GZDIR
+#if defined(USE_GZDIR) || defined(USE_ZLIB)
 #include "zlib.h"
 #endif
 
@@ -346,6 +346,52 @@ static void write_vtm(struct All_variables *E, int cycles)
     fclose(fp);
 }
 
+static void write_vtm_caps(struct All_variables *E, int cycles)
+{
+    FILE *fp;
+    char vtm_file[255];
+    int c;
+
+    const char header[] =
+        "<?xml version=\"1.0\"?>\n"
+        "<VTKFile type=\"vtkMultiBlockDataSet\" version=\"1.0\" compressor=\"vtkZLibDataCompressor\" byte_order=\"LittleEndian\">\n"
+        "  <vtkMultiBlockDataSet>\n";
+
+    snprintf(vtm_file, 255, "%s.%d.vtm",
+             E->control.data_file, cycles);
+    fp = output_open(vtm_file, "w");
+    fputs(header, fp);
+
+    for(c = 0; c < E->sphere.caps; c++) {
+        fprintf(fp, "    <DataSet index=\"%d\" file=\"%s.cap%d.%d.vts\"/>\n",
+                c, E->control.data_prefix, c, cycles);
+    }
+    fputs("  </vtkMultiBlockDataSet>\n", fp);
+    fputs("</VTKFile>", fp);
+
+    fclose(fp);
+}
+
+static void write_visit_caps(struct All_variables *E, int cycles)
+{
+    FILE *fp;
+    char visit_file[255];
+    int c;
+
+    const char header[] = "!NBLOCKS %d\n";
+
+    snprintf(visit_file, 255, "%s.%d.visit",
+             E->control.data_file, cycles);
+    fp = output_open(visit_file, "w");
+    fprintf(fp, header, E->sphere.caps);
+
+    for(c = 0; c < E->sphere.caps; c++) {
+        fprintf(fp, "%s.cap%d.%d.vts\n",
+                E->control.data_prefix, c, cycles);
+    }
+    fclose(fp);
+}
+
 static void write_visit(struct All_variables *E, int cycles)
 {
     FILE *fp;
@@ -449,10 +495,20 @@ static void write_pvd(struct All_variables *E, int cycles)
     double *hist_times;
     char (*hist_files)[512];
 
-    if (E->sphere.caps == 12) {
-        snprintf(target_file, sizeof(target_file), "%s.%d.vtm", E->control.data_prefix, cycles);
+    if (strcmp(E->output.vtk_output_mode, "single") == 0) {
+        snprintf(target_file, sizeof(target_file), "%s.%d.vtu", E->control.data_prefix, cycles);
+    } else if (strcmp(E->output.vtk_output_mode, "cap") == 0) {
+        if (E->sphere.caps == 12) {
+            snprintf(target_file, sizeof(target_file), "%s.%d.vtm", E->control.data_prefix, cycles);
+        } else {
+            snprintf(target_file, sizeof(target_file), "%s.cap0.%d.vts", E->control.data_prefix, cycles);
+        }
     } else {
-        snprintf(target_file, sizeof(target_file), "%s.%d.pvts", E->control.data_prefix, cycles);
+        if (E->sphere.caps == 12) {
+            snprintf(target_file, sizeof(target_file), "%s.%d.vtm", E->control.data_prefix, cycles);
+        } else {
+            snprintf(target_file, sizeof(target_file), "%s.%d.pvts", E->control.data_prefix, cycles);
+        }
     }
 
     if (E->data.scalet > 0.0) {
@@ -601,7 +657,7 @@ static void IntToUnsignedChar(int * intarray, int nn, unsigned char * chararray)
 static void zlibcompress(unsigned char* in, int nn, unsigned char** out, int *nn2)
 /* function to compress "in" to "out" reducing size from nn to nn2 */
 {
-#ifdef USE_GZDIR
+#if defined(USE_GZDIR) || defined(USE_ZLIB)
     int ntemp=0;
 
     /* in and out of z-stream */
@@ -664,7 +720,7 @@ static void zlibcompress(unsigned char* in, int nn, unsigned char** out, int *nn
 
     // now we know how short "out" should be!
     *nn2=ntemp;
-    *out = realloc(*out,sizeof(unsigned char)*ntemp);
+    *out = (unsigned char *)realloc(*out, sizeof(unsigned char)*ntemp);
 
     (void)deflateEnd(&strm);
 #endif
@@ -785,9 +841,63 @@ static void write_binary_array(int nn, float* array, FILE * f)
     free(compressedarray);
 }
 
+static void write_binary_uint8_array(int nn, const unsigned char* array, FILE * f)
+{
+    int compressedarraylength = 0;
+    unsigned char * compressedarray = NULL;
+    int base64plusheadlength;
+    unsigned char * base64plusheadarray;
+
+    zlibcompress((unsigned char*)array, nn, &compressedarray, &compressedarraylength);
+
+    base64plusheadlength = 24 + 4 * (int)ceil((double)compressedarraylength / 3.0);
+    base64plusheadarray = (unsigned char *)malloc(sizeof(unsigned char) * base64plusheadlength);
+
+    base64plushead(compressedarray, compressedarraylength, nn, base64plusheadarray);
+
+    fwrite(base64plusheadarray, sizeof(unsigned char), base64plusheadlength, f);
+    fprintf(f, "\n");
+
+    free(base64plusheadarray);
+    free(compressedarray);
+}
+
+static void write_binary_int_array(int nn, int* array, FILE * f)
+{
+    int chararraylength = 4 * nn;
+    unsigned char * chararray = (unsigned char *)malloc(chararraylength * sizeof(unsigned char));
+    int compressedarraylength = 0;
+    unsigned char * compressedarray = NULL;
+    int base64plusheadlength;
+    unsigned char * base64plusheadarray;
+
+    IntToUnsignedChar(array, nn, chararray);
+    zlibcompress(chararray, chararraylength, &compressedarray, &compressedarraylength);
+
+    base64plusheadlength = 24 + 4 * (int)ceil((double)compressedarraylength / 3.0);
+    base64plusheadarray = (unsigned char *)malloc(sizeof(unsigned char) * base64plusheadlength);
+
+    base64plushead(compressedarray, compressedarraylength, chararraylength, base64plusheadarray);
+
+    fwrite(base64plusheadarray, sizeof(unsigned char), base64plusheadlength, f);
+    fprintf(f, "\n");
+
+    free(chararray);
+    free(base64plusheadarray);
+    free(compressedarray);
+}
+
+static void write_ascii_int_array(int nn, int perLine, const int *array, FILE *fp)
+{
+    int i;
+    for (i = 0; i < nn; i++) {
+        fprintf(fp, "%d%s", array[i], ((i + 1) % perLine == 0 || i == nn - 1) ? "\n" : " ");
+    }
+}
+
 /**********************************************************************/
 
-void vtk_output(struct All_variables *E, int cycles)
+static void vtk_output_proc(struct All_variables *E, int cycles)
 {
     char output_file[255];
     FILE *fp;
@@ -845,3 +955,692 @@ void vtk_output(struct All_variables *E, int cycles)
     }
     return;
 }
+
+static void vtk_output_cap(struct All_variables *E, int cycles)
+{
+    int i, j, k;
+    int nproc_cap = E->parallel.nprocx * E->parallel.nprocy * E->parallel.nprocz;
+    int cap_id = E->parallel.me / nproc_cap;
+    int rank_in_cap = E->parallel.me % nproc_cap;
+
+    MPI_Comm cap_comm;
+    MPI_Comm_split(E->parallel.world, cap_id, rank_in_cap, &cap_comm);
+
+    int local_nno = E->lmesh.nno;
+    int nox = E->lmesh.nox;
+    int noy = E->lmesh.noy;
+    int noz = E->lmesh.noz;
+
+    int NOX = E->mesh.nox;
+    int NOY = E->mesh.noy;
+    int NOZ = E->mesh.noz;
+    int NNO_cap = NOX * NOY * NOZ;
+
+    /* 1. Extract local fields */
+    float *local_coord = (float *)malloc(local_nno * 3 * sizeof(float));
+    float *local_temp = (float *)malloc(local_nno * sizeof(float));
+    float *local_velo = (float *)malloc(local_nno * 3 * sizeof(float));
+    float *local_visc = (float *)malloc(local_nno * sizeof(float));
+    float *local_stress = NULL;
+
+    for (i = 0; i < local_nno; i++) {
+        local_coord[i * 3 + 0] = (float)E->x[1][1][i + 1];
+        local_coord[i * 3 + 1] = (float)E->x[1][2][i + 1];
+        local_coord[i * 3 + 2] = (float)E->x[1][3][i + 1];
+        local_temp[i] = (float)*(E->T[1] + i + 1);
+        local_visc[i] = E->VI[E->mesh.levmax][1][i + 1];
+    }
+
+    const int lev = E->mesh.levmax;
+    for (i = 1; i <= local_nno; i++) {
+        double sint = E->SinCos[lev][1][0][i];
+        double sinf = E->SinCos[lev][1][1][i];
+        double cost = E->SinCos[lev][1][2][i];
+        double cosf = E->SinCos[lev][1][3][i];
+        double v1 = E->sphere.cap[1].V[1][i];
+        double v2 = E->sphere.cap[1].V[2][i];
+        double v3 = E->sphere.cap[1].V[3][i];
+        local_velo[(i - 1) * 3 + 0] = (float)(v1 * cost * cosf - v2 * sinf + v3 * sint * cosf);
+        local_velo[(i - 1) * 3 + 1] = (float)(v1 * cost * sinf + v2 * cosf + v3 * sint * sinf);
+        local_velo[(i - 1) * 3 + 2] = (float)(-v1 * sint + v3 * cost);
+    }
+
+    if (E->output.stress) {
+        float *SXX[NCS], *SYY[NCS], *SZZ[NCS], *SXY[NCS], *SXZ[NCS], *SZY[NCS];
+        float *divv[NCS], *vorv[NCS];
+        allocate_STD_mem(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+        compute_nodal_stress(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+        free_STD_mem(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+
+        local_stress = (float *)malloc(local_nno * 6 * sizeof(float));
+        for (i = 0; i < local_nno * 6; i++) {
+            local_stress[i] = E->gstress[1][i + 1];
+        }
+    }
+
+    /* 2. Gather to cap leader */
+    float *cap_coord = NULL;
+    float *cap_temp = NULL;
+    float *cap_velo = NULL;
+    float *cap_visc = NULL;
+    float *cap_stress = NULL;
+
+    if (rank_in_cap == 0) {
+        cap_coord = (float *)malloc(NNO_cap * 3 * sizeof(float));
+        cap_temp = (float *)malloc(NNO_cap * sizeof(float));
+        cap_velo = (float *)malloc(NNO_cap * 3 * sizeof(float));
+        cap_visc = (float *)malloc(NNO_cap * sizeof(float));
+        if (E->output.stress) {
+            cap_stress = (float *)malloc(NNO_cap * 6 * sizeof(float));
+        }
+
+        /* Insert rank 0's own data */
+        int xs = 0, ys = 0, zs = 0;
+        for (j = 0; j < noy; j++) {
+            for (i = 0; i < nox; i++) {
+                for (k = 0; k < noz; k++) {
+                    int l_idx = k + i * noz + j * noz * nox;
+                    int gx = xs + i;
+                    int gy = ys + j;
+                    int gz = zs + k;
+                    int c_idx = gz + gx * NOZ + gy * NOZ * NOX;
+                    cap_temp[c_idx] = local_temp[l_idx];
+                    cap_visc[c_idx] = local_visc[l_idx];
+                    cap_coord[3 * c_idx + 0] = local_coord[3 * l_idx + 0];
+                    cap_coord[3 * c_idx + 1] = local_coord[3 * l_idx + 1];
+                    cap_coord[3 * c_idx + 2] = local_coord[3 * l_idx + 2];
+                    cap_velo[3 * c_idx + 0] = local_velo[3 * l_idx + 0];
+                    cap_velo[3 * c_idx + 1] = local_velo[3 * l_idx + 1];
+                    cap_velo[3 * c_idx + 2] = local_velo[3 * l_idx + 2];
+                    if (cap_stress && local_stress) {
+                        for (int c = 0; c < 6; c++)
+                            cap_stress[6 * c_idx + c] = local_stress[6 * l_idx + c];
+                    }
+                }
+            }
+        }
+
+        /* Receive from workers */
+        float *recv_buf = (float *)malloc(local_nno * (E->output.stress ? 6 : 3) * sizeof(float));
+        for (int r = 1; r < nproc_cap; r++) {
+            int r_pz = r % E->parallel.nprocz;
+            int r_px = ((r - r_pz) / E->parallel.nprocz) % E->parallel.nprocx;
+            int r_py = (r - r_pz) / (E->parallel.nprocz * E->parallel.nprocx);
+            int r_xs = r_px * (nox - 1);
+            int r_ys = r_py * (noy - 1);
+            int r_zs = r_pz * (noz - 1);
+
+            MPI_Status st;
+            /* Recv temp */
+            MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 101, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_temp[c_idx] = recv_buf[l_idx];
+                    }
+                }
+            }
+
+            /* Recv visc */
+            MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 102, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_visc[c_idx] = recv_buf[l_idx];
+                    }
+                }
+            }
+
+            /* Recv coord */
+            MPI_Recv(recv_buf, local_nno * 3, MPI_FLOAT, r, 103, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_coord[3 * c_idx + 0] = recv_buf[3 * l_idx + 0];
+                        cap_coord[3 * c_idx + 1] = recv_buf[3 * l_idx + 1];
+                        cap_coord[3 * c_idx + 2] = recv_buf[3 * l_idx + 2];
+                    }
+                }
+            }
+
+            /* Recv velo */
+            MPI_Recv(recv_buf, local_nno * 3, MPI_FLOAT, r, 104, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_velo[3 * c_idx + 0] = recv_buf[3 * l_idx + 0];
+                        cap_velo[3 * c_idx + 1] = recv_buf[3 * l_idx + 1];
+                        cap_velo[3 * c_idx + 2] = recv_buf[3 * l_idx + 2];
+                    }
+                }
+            }
+
+            /* Recv stress */
+            if (E->output.stress) {
+                MPI_Recv(recv_buf, local_nno * 6, MPI_FLOAT, r, 105, cap_comm, &st);
+                for (j = 0; j < noy; j++) {
+                    for (i = 0; i < nox; i++) {
+                        for (k = 0; k < noz; k++) {
+                            int l_idx = k + i * noz + j * noz * nox;
+                            int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                            for (int c = 0; c < 6; c++)
+                                cap_stress[6 * c_idx + c] = recv_buf[6 * l_idx + c];
+                        }
+                    }
+                }
+            }
+        }
+        free(recv_buf);
+
+        /* Write cap VTS file */
+        char output_file[255];
+        snprintf(output_file, 255, "%s.cap%d.%d.vts", E->control.data_file, cap_id, cycles);
+        FILE *fp = output_open(output_file, "w");
+
+        char extent[128];
+        snprintf(extent, sizeof(extent), "0 %d 0 %d 0 %d", NOZ - 1, NOX - 1, NOY - 1);
+        fprintf(fp, "<?xml version=\"1.0\"?>\n");
+        fprintf(fp, "<VTKFile type=\"StructuredGrid\" version=\"0.1\" compressor=\"vtkZLibDataCompressor\" byte_order=\"LittleEndian\">\n");
+        fprintf(fp, "  <StructuredGrid WholeExtent=\"%s\">\n", extent);
+        fprintf(fp, "    <Piece Extent=\"%s\">\n", extent);
+        fprintf(fp, "      <PointData Scalars=\"temperature\" Vectors=\"velocity\">\n");
+
+        /* Temperature */
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"temperature\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(NNO_cap, cap_temp, fp);
+        else
+            write_ascii_array(NNO_cap, 1, cap_temp, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        /* Velocity */
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"velocity\" NumberOfComponents=\"3\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(NNO_cap * 3, cap_velo, fp);
+        else
+            write_ascii_array(NNO_cap * 3, 3, cap_velo, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        /* Viscosity */
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"viscosity\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(NNO_cap, cap_visc, fp);
+        else
+            write_ascii_array(NNO_cap, 1, cap_visc, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        /* Stress */
+        if (E->output.stress && cap_stress) {
+            fprintf(fp, "        <DataArray type=\"Float32\" Name=\"stress\" NumberOfComponents=\"6\" format=\"%s\">\n", E->output.vtk_format);
+            if (strcmp(E->output.vtk_format, "binary") == 0)
+                write_binary_array(NNO_cap * 6, cap_stress, fp);
+            else
+                write_ascii_array(NNO_cap * 6, 6, cap_stress, fp);
+            fprintf(fp, "        </DataArray>\n");
+        }
+
+        fprintf(fp, "      </PointData>\n");
+        fprintf(fp, "      <CellData>\n      </CellData>\n");
+        fprintf(fp, "      <Points>\n");
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"coordinate\" NumberOfComponents=\"3\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(NNO_cap * 3, cap_coord, fp);
+        else
+            write_ascii_array(NNO_cap * 3, 3, cap_coord, fp);
+        fprintf(fp, "        </DataArray>\n");
+        fprintf(fp, "      </Points>\n");
+        fprintf(fp, "    </Piece>\n");
+        fprintf(fp, "  </StructuredGrid>\n");
+        fprintf(fp, "</VTKFile>\n");
+        fclose(fp);
+
+        free(cap_coord);
+        free(cap_temp);
+        free(cap_velo);
+        free(cap_visc);
+        if (cap_stress) free(cap_stress);
+
+    } else {
+        /* Worker sends local buffers */
+        MPI_Send(local_temp, local_nno, MPI_FLOAT, 0, 101, cap_comm);
+        MPI_Send(local_visc, local_nno, MPI_FLOAT, 0, 102, cap_comm);
+        MPI_Send(local_coord, local_nno * 3, MPI_FLOAT, 0, 103, cap_comm);
+        MPI_Send(local_velo, local_nno * 3, MPI_FLOAT, 0, 104, cap_comm);
+        if (E->output.stress && local_stress) {
+            MPI_Send(local_stress, local_nno * 6, MPI_FLOAT, 0, 105, cap_comm);
+        }
+    }
+
+    free(local_coord);
+    free(local_temp);
+    free(local_velo);
+    free(local_visc);
+    if (local_stress) free(local_stress);
+
+    MPI_Comm_free(&cap_comm);
+
+    /* Global rank 0 writes index files */
+    if (E->parallel.me == 0) {
+        if (E->sphere.caps == 12) {
+            write_vtm_caps(E, cycles);
+            write_visit_caps(E, cycles);
+        }
+        write_pvd(E, cycles);
+    }
+}
+
+static void vtk_output_single(struct All_variables *E, int cycles)
+{
+    int i, j, k;
+    int nproc_cap = E->parallel.nprocx * E->parallel.nprocy * E->parallel.nprocz;
+    int cap_id = E->parallel.me / nproc_cap;
+    int rank_in_cap = E->parallel.me % nproc_cap;
+
+    MPI_Comm cap_comm;
+    MPI_Comm_split(E->parallel.world, cap_id, rank_in_cap, &cap_comm);
+
+    int local_nno = E->lmesh.nno;
+    int nox = E->lmesh.nox;
+    int noy = E->lmesh.noy;
+    int noz = E->lmesh.noz;
+
+    int NOX = E->mesh.nox;
+    int NOY = E->mesh.noy;
+    int NOZ = E->mesh.noz;
+    int NNO_cap = NOX * NOY * NOZ;
+    int caps = E->sphere.caps;
+
+    /* 1. Extract local fields */
+    float *local_coord = (float *)malloc(local_nno * 3 * sizeof(float));
+    float *local_temp = (float *)malloc(local_nno * sizeof(float));
+    float *local_velo = (float *)malloc(local_nno * 3 * sizeof(float));
+    float *local_visc = (float *)malloc(local_nno * sizeof(float));
+    float *local_stress = NULL;
+
+    for (i = 0; i < local_nno; i++) {
+        local_coord[i * 3 + 0] = (float)E->x[1][1][i + 1];
+        local_coord[i * 3 + 1] = (float)E->x[1][2][i + 1];
+        local_coord[i * 3 + 2] = (float)E->x[1][3][i + 1];
+        local_temp[i] = (float)*(E->T[1] + i + 1);
+        local_visc[i] = E->VI[E->mesh.levmax][1][i + 1];
+    }
+
+    const int lev = E->mesh.levmax;
+    for (i = 1; i <= local_nno; i++) {
+        double sint = E->SinCos[lev][1][0][i];
+        double sinf = E->SinCos[lev][1][1][i];
+        double cost = E->SinCos[lev][1][2][i];
+        double cosf = E->SinCos[lev][1][3][i];
+        double v1 = E->sphere.cap[1].V[1][i];
+        double v2 = E->sphere.cap[1].V[2][i];
+        double v3 = E->sphere.cap[1].V[3][i];
+        local_velo[(i - 1) * 3 + 0] = (float)(v1 * cost * cosf - v2 * sinf + v3 * sint * cosf);
+        local_velo[(i - 1) * 3 + 1] = (float)(v1 * cost * sinf + v2 * cosf + v3 * sint * sinf);
+        local_velo[(i - 1) * 3 + 2] = (float)(-v1 * sint + v3 * cost);
+    }
+
+    if (E->output.stress) {
+        float *SXX[NCS], *SYY[NCS], *SZZ[NCS], *SXY[NCS], *SXZ[NCS], *SZY[NCS];
+        float *divv[NCS], *vorv[NCS];
+        allocate_STD_mem(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+        compute_nodal_stress(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+        free_STD_mem(E, SXX, SYY, SZZ, SXY, SXZ, SZY, divv, vorv);
+
+        local_stress = (float *)malloc(local_nno * 6 * sizeof(float));
+        for (i = 0; i < local_nno * 6; i++) {
+            local_stress[i] = E->gstress[1][i + 1];
+        }
+    }
+
+    /* 2. Assemble on cap leader */
+    float *cap_coord = NULL;
+    float *cap_temp = NULL;
+    float *cap_velo = NULL;
+    float *cap_visc = NULL;
+    float *cap_stress = NULL;
+
+    if (rank_in_cap == 0) {
+        cap_coord = (float *)malloc(NNO_cap * 3 * sizeof(float));
+        cap_temp = (float *)malloc(NNO_cap * sizeof(float));
+        cap_velo = (float *)malloc(NNO_cap * 3 * sizeof(float));
+        cap_visc = (float *)malloc(NNO_cap * sizeof(float));
+        if (E->output.stress) {
+            cap_stress = (float *)malloc(NNO_cap * 6 * sizeof(float));
+        }
+
+        int xs = 0, ys = 0, zs = 0;
+        for (j = 0; j < noy; j++) {
+            for (i = 0; i < nox; i++) {
+                for (k = 0; k < noz; k++) {
+                    int l_idx = k + i * noz + j * noz * nox;
+                    int gx = xs + i;
+                    int gy = ys + j;
+                    int gz = zs + k;
+                    int c_idx = gz + gx * NOZ + gy * NOZ * NOX;
+                    cap_temp[c_idx] = local_temp[l_idx];
+                    cap_visc[c_idx] = local_visc[l_idx];
+                    cap_coord[3 * c_idx + 0] = local_coord[3 * l_idx + 0];
+                    cap_coord[3 * c_idx + 1] = local_coord[3 * l_idx + 1];
+                    cap_coord[3 * c_idx + 2] = local_coord[3 * l_idx + 2];
+                    cap_velo[3 * c_idx + 0] = local_velo[3 * l_idx + 0];
+                    cap_velo[3 * c_idx + 1] = local_velo[3 * l_idx + 1];
+                    cap_velo[3 * c_idx + 2] = local_velo[3 * l_idx + 2];
+                    if (cap_stress && local_stress) {
+                        for (int c = 0; c < 6; c++)
+                            cap_stress[6 * c_idx + c] = local_stress[6 * l_idx + c];
+                    }
+                }
+            }
+        }
+
+        float *recv_buf = (float *)malloc(local_nno * (E->output.stress ? 6 : 3) * sizeof(float));
+        for (int r = 1; r < nproc_cap; r++) {
+            int r_pz = r % E->parallel.nprocz;
+            int r_px = ((r - r_pz) / E->parallel.nprocz) % E->parallel.nprocx;
+            int r_py = (r - r_pz) / (E->parallel.nprocz * E->parallel.nprocx);
+            int r_xs = r_px * (nox - 1);
+            int r_ys = r_py * (noy - 1);
+            int r_zs = r_pz * (noz - 1);
+
+            MPI_Status st;
+            MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 201, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_temp[c_idx] = recv_buf[l_idx];
+                    }
+                }
+            }
+
+            MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 202, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_visc[c_idx] = recv_buf[l_idx];
+                    }
+                }
+            }
+
+            MPI_Recv(recv_buf, local_nno * 3, MPI_FLOAT, r, 203, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_coord[3 * c_idx + 0] = recv_buf[3 * l_idx + 0];
+                        cap_coord[3 * c_idx + 1] = recv_buf[3 * l_idx + 1];
+                        cap_coord[3 * c_idx + 2] = recv_buf[3 * l_idx + 2];
+                    }
+                }
+            }
+
+            MPI_Recv(recv_buf, local_nno * 3, MPI_FLOAT, r, 204, cap_comm, &st);
+            for (j = 0; j < noy; j++) {
+                for (i = 0; i < nox; i++) {
+                    for (k = 0; k < noz; k++) {
+                        int l_idx = k + i * noz + j * noz * nox;
+                        int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                        cap_velo[3 * c_idx + 0] = recv_buf[3 * l_idx + 0];
+                        cap_velo[3 * c_idx + 1] = recv_buf[3 * l_idx + 1];
+                        cap_velo[3 * c_idx + 2] = recv_buf[3 * l_idx + 2];
+                    }
+                }
+            }
+
+            if (E->output.stress) {
+                MPI_Recv(recv_buf, local_nno * 6, MPI_FLOAT, r, 205, cap_comm, &st);
+                for (j = 0; j < noy; j++) {
+                    for (i = 0; i < nox; i++) {
+                        for (k = 0; k < noz; k++) {
+                            int l_idx = k + i * noz + j * noz * nox;
+                            int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                            for (int c = 0; c < 6; c++)
+                                cap_stress[6 * c_idx + c] = recv_buf[6 * l_idx + c];
+                        }
+                    }
+                }
+            }
+        }
+        free(recv_buf);
+    } else {
+        MPI_Send(local_temp, local_nno, MPI_FLOAT, 0, 201, cap_comm);
+        MPI_Send(local_visc, local_nno, MPI_FLOAT, 0, 202, cap_comm);
+        MPI_Send(local_coord, local_nno * 3, MPI_FLOAT, 0, 203, cap_comm);
+        MPI_Send(local_velo, local_nno * 3, MPI_FLOAT, 0, 204, cap_comm);
+        if (E->output.stress && local_stress) {
+            MPI_Send(local_stress, local_nno * 6, MPI_FLOAT, 0, 205, cap_comm);
+        }
+    }
+
+    free(local_coord);
+    free(local_temp);
+    free(local_velo);
+    free(local_visc);
+    if (local_stress) free(local_stress);
+    MPI_Comm_free(&cap_comm);
+
+    /* 3. Gather all caps to global rank 0 and write monolithic .vtu */
+    int total_points = caps * NNO_cap;
+    int elx = NOX - 1;
+    int ely = NOY - 1;
+    int elz = NOZ - 1;
+    int cells_per_cap = elx * ely * elz;
+    int total_cells = caps * cells_per_cap;
+
+    float *all_coord = NULL;
+    float *all_temp = NULL;
+    float *all_velo = NULL;
+    float *all_visc = NULL;
+    float *all_stress = NULL;
+
+    if (E->parallel.me == 0) {
+        all_coord = (float *)malloc(total_points * 3 * sizeof(float));
+        all_temp = (float *)malloc(total_points * sizeof(float));
+        all_velo = (float *)malloc(total_points * 3 * sizeof(float));
+        all_visc = (float *)malloc(total_points * sizeof(float));
+        if (E->output.stress) {
+            all_stress = (float *)malloc(total_points * 6 * sizeof(float));
+        }
+
+        /* Copy cap 0 */
+        memcpy(all_coord, cap_coord, NNO_cap * 3 * sizeof(float));
+        memcpy(all_temp, cap_temp, NNO_cap * sizeof(float));
+        memcpy(all_velo, cap_velo, NNO_cap * 3 * sizeof(float));
+        memcpy(all_visc, cap_visc, NNO_cap * sizeof(float));
+        if (all_stress && cap_stress) {
+            memcpy(all_stress, cap_stress, NNO_cap * 6 * sizeof(float));
+        }
+
+        /* Receive remaining caps from cap leaders */
+        for (int c = 1; c < caps; c++) {
+            int leader_rank = c * nproc_cap;
+            MPI_Status st;
+            MPI_Recv(all_temp + c * NNO_cap, NNO_cap, MPI_FLOAT, leader_rank, 301, E->parallel.world, &st);
+            MPI_Recv(all_visc + c * NNO_cap, NNO_cap, MPI_FLOAT, leader_rank, 302, E->parallel.world, &st);
+            MPI_Recv(all_coord + c * NNO_cap * 3, NNO_cap * 3, MPI_FLOAT, leader_rank, 303, E->parallel.world, &st);
+            MPI_Recv(all_velo + c * NNO_cap * 3, NNO_cap * 3, MPI_FLOAT, leader_rank, 304, E->parallel.world, &st);
+            if (all_stress) {
+                MPI_Recv(all_stress + c * NNO_cap * 6, NNO_cap * 6, MPI_FLOAT, leader_rank, 305, E->parallel.world, &st);
+            }
+        }
+    } else if (rank_in_cap == 0) {
+        /* Other cap leaders send to global rank 0 */
+        MPI_Send(cap_temp, NNO_cap, MPI_FLOAT, 0, 301, E->parallel.world);
+        MPI_Send(cap_visc, NNO_cap, MPI_FLOAT, 0, 302, E->parallel.world);
+        MPI_Send(cap_coord, NNO_cap * 3, MPI_FLOAT, 0, 303, E->parallel.world);
+        MPI_Send(cap_velo, NNO_cap * 3, MPI_FLOAT, 0, 304, E->parallel.world);
+        if (E->output.stress && cap_stress) {
+            MPI_Send(cap_stress, NNO_cap * 6, MPI_FLOAT, 0, 305, E->parallel.world);
+        }
+    }
+
+    if (cap_coord) free(cap_coord);
+    if (cap_temp) free(cap_temp);
+    if (cap_velo) free(cap_velo);
+    if (cap_visc) free(cap_visc);
+    if (cap_stress) free(cap_stress);
+
+    /* 4. Write monolithic .vtu file on global rank 0 */
+    if (E->parallel.me == 0) {
+        char vtu_file[255];
+        snprintf(vtu_file, 255, "%s.%d.vtu", E->control.data_file, cycles);
+        FILE *fp = output_open(vtu_file, "w");
+
+        fprintf(fp, "<?xml version=\"1.0\"?>\n");
+        fprintf(fp, "<VTKFile type=\"UnstructuredGrid\" version=\"0.1\" compressor=\"vtkZLibDataCompressor\" byte_order=\"LittleEndian\">\n");
+        fprintf(fp, "  <UnstructuredGrid>\n");
+        fprintf(fp, "    <Piece NumberOfPoints=\"%d\" NumberOfCells=\"%d\">\n", total_points, total_cells);
+
+        /* PointData */
+        fprintf(fp, "      <PointData Scalars=\"temperature\" Vectors=\"velocity\">\n");
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"temperature\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(total_points, all_temp, fp);
+        else
+            write_ascii_array(total_points, 1, all_temp, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"velocity\" NumberOfComponents=\"3\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(total_points * 3, all_velo, fp);
+        else
+            write_ascii_array(total_points * 3, 3, all_velo, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"viscosity\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(total_points, all_visc, fp);
+        else
+            write_ascii_array(total_points, 1, all_visc, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        if (E->output.stress && all_stress) {
+            fprintf(fp, "        <DataArray type=\"Float32\" Name=\"stress\" NumberOfComponents=\"6\" format=\"%s\">\n", E->output.vtk_format);
+            if (strcmp(E->output.vtk_format, "binary") == 0)
+                write_binary_array(total_points * 6, all_stress, fp);
+            else
+                write_ascii_array(total_points * 6, 6, all_stress, fp);
+            fprintf(fp, "        </DataArray>\n");
+        }
+        fprintf(fp, "      </PointData>\n");
+
+        /* Points */
+        fprintf(fp, "      <Points>\n");
+        fprintf(fp, "        <DataArray type=\"Float32\" Name=\"coordinate\" NumberOfComponents=\"3\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_array(total_points * 3, all_coord, fp);
+        else
+            write_ascii_array(total_points * 3, 3, all_coord, fp);
+        fprintf(fp, "        </DataArray>\n");
+        fprintf(fp, "      </Points>\n");
+
+        /* Cells */
+        int *connectivity = (int *)malloc(total_cells * 8 * sizeof(int));
+        int *offsets = (int *)malloc(total_cells * sizeof(int));
+        unsigned char *cell_types = (unsigned char *)malloc(total_cells * sizeof(unsigned char));
+
+        int cell_cnt = 0;
+        for (int c = 0; c < caps; c++) {
+            int cap_base = c * NNO_cap;
+            for (j = 0; j < ely; j++) {
+                for (i = 0; i < elx; i++) {
+                    for (k = 0; k < elz; k++) {
+                        /* Hexahedron node connectivity: 8 vertices */
+                        int n0 = k + i * NOZ + j * NOZ * NOX + cap_base;
+                        int n1 = (k + 1) + i * NOZ + j * NOZ * NOX + cap_base;
+                        int n2 = (k + 1) + (i + 1) * NOZ + j * NOZ * NOX + cap_base;
+                        int n3 = k + (i + 1) * NOZ + j * NOZ * NOX + cap_base;
+                        int n4 = k + i * NOZ + (j + 1) * NOZ * NOX + cap_base;
+                        int n5 = (k + 1) + i * NOZ + (j + 1) * NOZ * NOX + cap_base;
+                        int n6 = (k + 1) + (i + 1) * NOZ + (j + 1) * NOZ * NOX + cap_base;
+                        int n7 = k + (i + 1) * NOZ + (j + 1) * NOZ * NOX + cap_base;
+
+                        connectivity[cell_cnt * 8 + 0] = n0;
+                        connectivity[cell_cnt * 8 + 1] = n1;
+                        connectivity[cell_cnt * 8 + 2] = n2;
+                        connectivity[cell_cnt * 8 + 3] = n3;
+                        connectivity[cell_cnt * 8 + 4] = n4;
+                        connectivity[cell_cnt * 8 + 5] = n5;
+                        connectivity[cell_cnt * 8 + 6] = n6;
+                        connectivity[cell_cnt * 8 + 7] = n7;
+
+                        offsets[cell_cnt] = (cell_cnt + 1) * 8;
+                        cell_types[cell_cnt] = 12; /* VTK_HEXAHEDRON */
+                        cell_cnt++;
+                    }
+                }
+            }
+        }
+
+        fprintf(fp, "      <Cells>\n");
+        /* Connectivity */
+        fprintf(fp, "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_int_array(total_cells * 8, connectivity, fp);
+        else
+            write_ascii_int_array(total_cells * 8, 8, connectivity, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        /* Offsets */
+        fprintf(fp, "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_int_array(total_cells, offsets, fp);
+        else
+            write_ascii_int_array(total_cells, 8, offsets, fp);
+        fprintf(fp, "        </DataArray>\n");
+
+        /* Types */
+        fprintf(fp, "        <DataArray type=\"UInt8\" Name=\"types\" format=\"%s\">\n", E->output.vtk_format);
+        if (strcmp(E->output.vtk_format, "binary") == 0)
+            write_binary_uint8_array(total_cells, cell_types, fp);
+        else {
+            for (i = 0; i < total_cells; i++)
+                fprintf(fp, "%d%s", cell_types[i], ((i + 1) % 16 == 0 || i == total_cells - 1) ? "\n" : " ");
+        }
+        fprintf(fp, "        </DataArray>\n");
+        fprintf(fp, "      </Cells>\n");
+
+        fprintf(fp, "    </Piece>\n");
+        fprintf(fp, "  </UnstructuredGrid>\n");
+        fprintf(fp, "</VTKFile>\n");
+        fclose(fp);
+
+        free(connectivity);
+        free(offsets);
+        free(cell_types);
+
+        free(all_coord);
+        free(all_temp);
+        free(all_velo);
+        free(all_visc);
+        if (all_stress) free(all_stress);
+
+        /* Write PVD */
+        write_pvd(E, cycles);
+    }
+}
+
+void vtk_output(struct All_variables *E, int cycles)
+{
+    if (strcmp(E->output.vtk_output_mode, "proc") == 0) {
+        vtk_output_proc(E, cycles);
+    } else if (strcmp(E->output.vtk_output_mode, "single") == 0) {
+        vtk_output_single(E, cycles);
+    } else {
+        /* default: "cap" */
+        vtk_output_cap(E, cycles);
+    }
+}
+

@@ -1,6 +1,6 @@
 # citcoms_cpp: Modern C++17 Mantle Convection Simulation Engine
 
-[![Version: 0.1.0](https://img.shields.io/badge/Version-citcoms__cpp--v0.1.0-brightgreen.svg)](https://github.com/Xjchen0/citcoms_cpp/releases/tag/citcoms_cpp-v0.1.0)
+[![Version: 0.2.0](https://img.shields.io/badge/Version-citcoms__cpp--v0.2.0-brightgreen.svg)](https://github.com/Xjchen0/citcoms_cpp/releases/tag/citcoms_cpp-v0.2.0)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](COPYING)
 [![C++17](https://img.shields.io/badge/Language-C%2B%2B17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![CMake](https://img.shields.io/badge/Build-CMake%20%E2%89%A5%203.16-brightgreen.svg)](https://cmake.org)
@@ -235,7 +235,7 @@ By default, when `output_optional_ascii` is set to `"horiz_avg"` (or under compo
 * **Termination Checkpoint (`checkpoint_on_termination = "on"`)**:
   Guarantees writing a final valid checkpoint when the simulation completes or reaches `max_timesteps` / `cpu_limits_in_seconds`.
 
-### 6.4 Geological Age (Myr) Triggers & Exact Time Snapping
+### 6.4 Geological Age (Myr) Triggers, Exact Time Snapping & Simulation Endpoint
 * **Physical Time Triggers (`storage_interval_myr`, `checkpoint_interval_myr`)**:
   Users can specify output and checkpoint intervals directly in physical geological age (Myr):
   ```ini
@@ -244,8 +244,14 @@ By default, when `output_optional_ascii` is set to `"horiz_avg"` (or under compo
   ```
   CitcomS automatically maps physical Myr to internal dimensionless time units using `scalet = (R^2 / kappa) / (1e6 * 365.25 * 24 * 3600)`.
   *(Note: When physical intervals are configured without explicit step intervals, step-based counters are automatically disabled).*
+* **Simulation Termination Endpoint (`end_age_myr` / `end_time_myr`)**:
+  Allows users to terminate simulations directly at a physical geological age (e.g. 50.0 Myr or present day 0.0 Myr) rather than guessing time-step counts:
+  ```ini
+  end_age_myr = 100.0            # Cleanly stop simulation when reaching 100.0 Myr
+  ```
+  CitcomS automatically computes the dimensionless target `end_time = end_age_myr / scalet`.
 * **Exact Time Step Snapping (`exact_time_output = "on"`)**:
-  Dynamically clamps the CFL timestep $\Delta t$ at milestone steps so simulation frames land precisely on requested Myr boundaries (e.g., 1.000 Myr, 2.000 Myr) for uniform, flicker-free animation rendering.
+  Dynamically clamps the CFL timestep $\Delta t$ at milestone steps and when approaching `end_age_myr` so simulation frames and the termination point land precisely on requested Myr boundaries (e.g., exactly 100.000 Myr) for uniform, flicker-free animation rendering, guaranteed final field output, and termination checkpointing.
 
 ### 6.5 Checkpoint-Based Continuation & Two-Stage Restarts
 CitcomS supports full binary checkpointing and seamless multi-stage restarts:
@@ -262,12 +268,23 @@ CitcomS directly reads high-precision binary checkpoint `.chkpt` files without r
 ### 6.6 ParaView 1-Click Interactive Visualization (VTK & HDF5)
 CitcomS provides automated timeline index generation for both VTK and HDF5, enabling instant 3D interactive rendering and dynamic playback in ParaView without any manual data stitching:
 - **VTK Workflow (`output_format = "ascii,vtk"`)**:
-  - **Files Generated**: `${data_file}.pvd` (master temporal collection), `${data_file}.<cycle>.vtm` (multi-block index), and `${data_file}.proc*.<cycle>.vts` (per-rank structured grids).
+  - **Granularity Modes (`vtk_output_mode` / `vtk_split_mode`)**:
+    - `vtk_output_mode = "cap"` (Default, Recommended): Merges subdomains per cap. Outputs 12 `.cap*.vts` files (for full sphere) or 1 file (for regional) plus a master `${data_file}.<cycle>.vtm` multi-block index. Reduces file counts by ~96% while maintaining structured grid topology and fast memory-mapped slicing.
+    - `vtk_output_mode = "single"` (or `"unified"`): Assembles all 12 caps into a single monolithic `${data_file}.<cycle>.vtu` (UnstructuredGrid with Hexahedron-8 elements) per timestep. Easiest for single-file sharing and drag-and-drop ParaView opening.
+    - `vtk_output_mode = "proc"` (Legacy): Writes 1 structured `.proc*.vts` file per MPI rank.
+  - **Encoding (`vtk_format`)**:
+    - `vtk_format = "binary"` (Default): High-speed zlib compressed base64 encoded binary arrays (~70% storage savings).
+    - `vtk_format = "ascii"`: Human-readable plain text.
   - **ParaView Usage**:
     1. Open ParaView, click **File -> Open**, and select `${data_file}.pvd`.
     2. Click **Apply**. The complete 3D spherical mantle renders immediately.
     3. Press **Play (▶️)** on the top toolbar to watch the thermal plumes and mantle convection evolve smoothly across geological time (Myr)!
 - **HDF5 Workflow (`output_format = "ascii,hdf5"`)**:
+  - **Native 3D Cartesian Geometry & Vectors**:
+    - `/coord`: True 3D Cartesian coordinates $(X, Y, Z)$ mapped to ParaView `<Geometry GeometryType="XYZ">`. ParaView renders the spherical shell directly without distortion.
+    - `/coord_rtp`: Spherical coordinates $(\theta, \phi, r)$ preserved for scientific analysis scripts.
+    - `/velocity`: Rotated Cartesian velocities $(v_x, v_y, v_z)$ mapped to ParaView `<Attribute Name="velocity" AttributeType="Vector">`. Vector glyph arrows point accurately in 3D Euclidean space.
+    - `/velocity_rtp`: Raw spherical velocity components $(v_\theta, v_\phi, v_r)$ preserved for radial flux calculations.
   - **Files Generated**: `${data_file}.xdmf` (master temporal & spatial grid index), `${data_file}.h5` (nodal mesh geometry), and `${data_file}.<cycle>.h5` (physical fields).
   - **ParaView Usage**:
     1. Open ParaView, click **File -> Open**, and select `${data_file}.xdmf`.

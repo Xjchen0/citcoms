@@ -202,6 +202,11 @@ void std_timestep(struct All_variables *E)
         if (gap > 1.0e-4 * E->control.checkpoint_interval_time && gap < min_gap)
           min_gap = gap;
       }
+      if (E->control.end_time > 0.0) {
+        gap = E->control.end_time - E->monitor.elapsed_time;
+        if (gap > 1.0e-7 * E->control.end_time && gap < min_gap)
+          min_gap = gap;
+      }
       if (min_gap < (double)E->advection.timestep) {
         E->advection.timestep = (float)min_gap;
       }
