@@ -30,6 +30,7 @@
    to the point of redundancy. */
 
 #include <math.h>
+#include <string.h>
 #include "element_definitions.h"
 #include "global_defs.h"
 #include "material_properties.h"
@@ -612,6 +613,8 @@ void build_diagonal_of_Ahat(struct All_variables *E)
 
     double BU;
     int m,e,npno,level;
+    const int use_visc_mass = (strcmp(E->control.p_precond, "visc_mass") == 0);
+    const int vpts = vpoints[E->mesh.nsd];
 
  for (level=E->mesh.gridmin;level<=E->mesh.gridmax;level++)
 
@@ -626,13 +629,29 @@ void build_diagonal_of_Ahat(struct All_variables *E)
      if(!E->control.precondition)
 	return;
 
-     for(e=1;e<=npno;e++)  {
-	BU=assemble_dAhatp_entry(E,e,level,m);
-	if(BU != 0.0)
-	    E->BPI[level][m][e] = 1.0/BU;
-	else
-	    E->BPI[level][m][e] = 1.0;
+     if (use_visc_mass) {
+        const double aug = (E->control.augmented_Lagr) ? E->control.augmented : 0.0;
+        for (e = 1; e <= npno; e++) {
+            double visc = 0.0;
+            const int base = (e - 1) * vpts;
+            for (int k = 1; k <= vpts; k++)
+                visc += E->EVI[level][m][base + k];
+            visc /= (double)vpts;
+            const double vol = E->ECO[level][m][e].area;
+            if (vol > 0.0)
+                E->BPI[level][m][e] = visc * (1.0 / vol + aug);
+            else
+                E->BPI[level][m][e] = 1.0;
         }
+     } else {
+        for(e=1;e<=npno;e++)  {
+           BU=assemble_dAhatp_entry(E,e,level,m);
+           if(BU != 0.0)
+               E->BPI[level][m][e] = 1.0/BU;
+           else
+               E->BPI[level][m][e] = 1.0;
+        }
+     }
      }
 
     return;

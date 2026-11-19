@@ -729,6 +729,12 @@ void read_initial_settings(struct All_variables *E)
   input_int("up_heavy",&(E->control.up_heavy),"1,0,nomax",m);
   input_double("accuracy",&(E->control.accuracy),"1.0e-4,0.0,1.0",m);
   input_double("inner_accuracy_scale",&(E->control.inner_accuracy_scale),"1.0,0.000001,1.0",m);
+  input_double("inner_rel_tol",&(E->control.inner_rel_tol),"0.0,0.0,1.0",m);
+  input_int("fcg_mmax",&(E->control.fcg_mmax),"10,1,100",m);
+  input_int("fgmres_restart",&(E->control.fgmres_restart),"30,2,200",m);
+  input_int("residual_refresh_every",&(E->control.residual_refresh_every),"0,0,10000",m);
+  input_int("inner_mg_cycles",&(E->control.inner_mg_cycles),"0,0,50",m);
+  input_string("p_precond",E->control.p_precond,"bpi",m);
 
   input_boolean("force_iteration",&(E->control.force_iteration),"off",m);
 
@@ -757,17 +763,25 @@ void read_initial_settings(struct All_variables *E)
   else
       E->control.inv_gruneisen = 0;
 
-  if(E->control.inv_gruneisen != 0) {
-      /* which compressible solver to use: "cg" or "bicg" */
-        input_string("uzawa",E->control.uzawa,"cg",m);
-      if(strcmp(E->control.uzawa, "cg") == 0) {
-          /* more convergence parameters for "cg" */
+  /* Outer Stokes Uzawa solver: "cg" (default, legacy), "fcg" (Flexible CG),
+   * "fgmres" (Flexible GMRES, supports both incompressible & compressible),
+   * or "bicg" (compressible BiCGStab) */
+  input_string("uzawa",E->control.uzawa,"cg",m);
+  if(strcmp(E->control.uzawa, "cg") == 0 || strcmp(E->control.uzawa, "fcg") == 0) {
+      if(E->control.inv_gruneisen != 0) {
           input_int("compress_iter_maxstep",&(E->control.compress_iter_maxstep),"100",m);
       }
-      else if(strcmp(E->control.uzawa, "bicg") == 0) {
+  }
+  else if(strcmp(E->control.uzawa, "fgmres") == 0) {
+      /* FGMRES handles both incompressible and compressible operators directly */
+  }
+  else if(strcmp(E->control.uzawa, "bicg") == 0) {
+      if(E->control.inv_gruneisen == 0 && E->parallel.me == 0) {
+          fprintf(stderr, "Warning: uzawa=bicg is intended for compressible flow; using CG.\n");
       }
-      else
-          myerror(E, "Error: unknown Uzawa iteration\n");
+  }
+  else {
+      myerror(E, "Error: unknown Uzawa iteration (must be 'cg', 'fcg', 'fgmres', or 'bicg')\n");
   }
 
   input_float("surfaceT",&(E->control.surface_temp),"0.1",m);

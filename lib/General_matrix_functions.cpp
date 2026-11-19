@@ -87,6 +87,14 @@ int solve_del2_u(struct All_variables *E, double **d0, double **F, double acc, i
 
   r0=residual=sqrt(global_vdot(E,F,F,high_lev));
 
+  /* Optional relative inner tolerance: prevents early inaccurate inner exits when ||grad(s)|| is small */
+  double target_acc = acc;
+  if (E->control.inner_rel_tol > 0.0) {
+      const double rel_acc = E->control.inner_rel_tol * r0;
+      if (rel_acc < target_acc)
+          target_acc = rel_acc;
+  }
+
   prior_residual=2*residual;
   count = 0;
   initial_time=CPU_time0();
@@ -95,29 +103,32 @@ int solve_del2_u(struct All_variables *E, double **d0, double **F, double acc, i
     /* conjugate gradient solution */
 
     cycles = E->control.v_steps_low;
-    residual = conj_grad(E,d0,F,acc,&cycles,high_lev);
-    valid = (residual < acc)? 1:0;
+    residual = conj_grad(E,d0,F,target_acc,&cycles,high_lev);
+    valid = (residual < target_acc)? 1:0;
   } else  {
     
     /* solve using multigrid  */
+    const int max_cycles = (E->control.inner_mg_cycles > 0)
+                           ? E->control.inner_mg_cycles
+                           : E->control.max_mg_cycles;
 
     counts =0;
     if(E->parallel.me==0){	/* output */
-      snprintf(message,200,"resi = %.6e for iter %d acc %.6e",residual,counts,acc);
+      snprintf(message,200,"resi = %.6e for iter %d acc %.6e",residual,counts,target_acc);
       record(E,message);
       report(E,message);
     }
 
     do {
-      residual=multi_grid(E,d0,F,acc,high_lev);
-      valid = (residual < acc)?1:0;
+      residual=multi_grid(E,d0,F,target_acc,high_lev);
+      valid = (residual < target_acc || E->control.inner_mg_cycles > 0)?1:0;
       counts ++;
       if(E->parallel.me==0){	/* output  */
-	snprintf(message,200,"resi = %.6e for iter %d acc %.6e",residual,counts,acc);
+	snprintf(message,200,"resi = %.6e for iter %d acc %.6e",residual,counts,target_acc);
 	record(E,message);
 	report(E,message);
       }
-    }  while (!valid && counts < E->control.max_mg_cycles);
+    }  while ((residual >= target_acc) && counts < max_cycles);
 
     cycles = counts;
   }

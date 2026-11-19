@@ -495,6 +495,12 @@ struct CONTROL {
   int use_cbf_topo;		/* use consistent dynamic topo method? */
 
     char uzawa[20];
+    double inner_rel_tol;            /* Relative inner velocity tolerance (0.0 = legacy absolute-only) */
+    int fcg_mmax;                    /* Truncation window for Flexible CG (uzawa=fcg) */
+    int fgmres_restart;              /* Krylov restart dimension for FGMRES (uzawa=fgmres) */
+    int residual_refresh_every;      /* Periodic true divergence refresh interval (0 = off) */
+    int inner_mg_cycles;             /* Fixed inner MG cycles per outer step for flexible solvers (0 = tol-driven) */
+    char p_precond[20];              /* Pressure preconditioner: "bpi" (default) or "visc_mass" */
 
     float inputdiff;
     float VBXtopval;
