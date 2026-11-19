@@ -735,6 +735,9 @@ void read_initial_settings(struct All_variables *E)
   input_int("residual_refresh_every",&(E->control.residual_refresh_every),"0,0,10000",m);
   input_int("inner_mg_cycles",&(E->control.inner_mg_cycles),"0,0,50",m);
   input_string("p_precond",E->control.p_precond,"bpi",m);
+  input_string("mg_mode",E->control.mg_mode,"fmg",m);
+  input_string("mg_smoother",E->control.mg_smoother,"scalar_gs",m);
+  input_string("coarse_solver",E->control.coarse_solver,"gs",m);
 
   input_boolean("force_iteration",&(E->control.force_iteration),"off",m);
 

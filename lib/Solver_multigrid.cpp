@@ -270,6 +270,16 @@ void project_viscosity(struct All_variables *E)
 	visc_from_gint_to_ele(E,E->EVIn2[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVIn2[sl_minus],sl_minus);
 	visc_from_gint_to_ele(E,E->EVIn3[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVIn3[sl_minus],sl_minus);
       }
+      else if (E->viscosity.smooth_cycles==4)   {
+	visc_from_gint_to_ele(E,E->EVI[lv],viscU,lv);/* isotropic geometric mean */
+	project_scalar_e_geom(E,lv,viscU,viscD);
+	visc_from_ele_to_gint(E,viscD,E->EVI[sl_minus],sl_minus);
+	/* anisotropic (signed directors use arithmetic mean) */
+	visc_from_gint_to_ele(E,E->EVI2[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVI2[sl_minus],sl_minus);
+	visc_from_gint_to_ele(E,E->EVIn1[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVIn1[sl_minus],sl_minus);
+	visc_from_gint_to_ele(E,E->EVIn2[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVIn2[sl_minus],sl_minus);
+	visc_from_gint_to_ele(E,E->EVIn3[lv],viscU,lv);project_scalar_e(E,lv,viscU,viscD);visc_from_ele_to_gint(E,viscD,E->EVIn3[sl_minus],sl_minus);
+      }
       else if (E->viscosity.smooth_cycles==0)  {
 	inject_scalar(E,lv,E->VI[lv],E->VI[sl_minus]);/* isotropic */
 	visc_from_nodes_to_gint(E,E->VI[sl_minus],E->EVI[sl_minus],sl_minus);
@@ -300,6 +310,11 @@ void project_viscosity(struct All_variables *E)
       else if (E->viscosity.smooth_cycles==3)   {
 	visc_from_gint_to_ele(E,E->EVI[lv],viscU,lv);
 	project_scalar_e(E,lv,viscU,viscD);
+	visc_from_ele_to_gint(E,viscD,E->EVI[sl_minus],sl_minus);
+      }
+      else if (E->viscosity.smooth_cycles==4)   {
+	visc_from_gint_to_ele(E,E->EVI[lv],viscU,lv);
+	project_scalar_e_geom(E,lv,viscU,viscD);
 	visc_from_ele_to_gint(E,viscD,E->EVI[sl_minus],sl_minus);
       }
       else if (E->viscosity.smooth_cycles==0)  {
@@ -359,6 +374,34 @@ void inject_scalar_e(struct All_variables *E, int start_lev, float **AU, float *
                 }
 
 return;
+}
+
+/* ==================================================== */
+void project_scalar_e_geom(struct All_variables *E, int start_lev, float **AU, float **AD)
+{
+    int i, m, el, e;
+    const int sl_minus = start_lev - 1;
+    const int nels_minus = E->lmesh.NEL[sl_minus];
+    const int ends = enodes[E->mesh.nsd];
+    const double weight = 1.0 / (double)ends;
+    const int vpts = vpoints[E->mesh.nsd];
+    const int n_minus = nels_minus * vpts;
+
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)
+        for (i = 1; i <= n_minus; i++)
+            AD[m][i] = 0.0f;
+
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)
+        for (el = 1; el <= nels_minus; el++) {
+            double log_sum = 0.0;
+            for (i = 1; i <= ENODES3D; i++) {
+                e = E->EL[sl_minus][m][el].sub[i];
+                double val = (double)AU[m][e];
+                if (val < 1.0e-30) val = 1.0e-30;
+                log_sum += log(val);
+            }
+            AD[m][el] = (float)exp(log_sum * weight);
+        }
 }
 
 /* ==================================================== */

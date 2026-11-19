@@ -501,6 +501,9 @@ struct CONTROL {
     int residual_refresh_every;      /* Periodic true divergence refresh interval (0 = off) */
     int inner_mg_cycles;             /* Fixed inner MG cycles per outer step for flexible solvers (0 = tol-driven) */
     char p_precond[20];              /* Pressure preconditioner: "bpi" (default) or "visc_mass" */
+    char mg_mode[20];                /* Multigrid cycle mode: "fmg" (default, legacy) or "vcycle" */
+    char mg_smoother[20];            /* Smoother: "scalar_gs" (default), "block3x3_gs", "block3x3_sgs", "chebyshev" */
+    char coarse_solver[20];          /* Coarsest-level solver: "gs" (default) or "cg" */
 
     float inputdiff;
     float VBXtopval;

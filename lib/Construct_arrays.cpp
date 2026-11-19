@@ -26,11 +26,154 @@
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 #include <math.h>
+#include <string.h>
 #include <sys/types.h>
 #include <stdint.h>
 #include <vector>
 #include "element_definitions.h"
 #include "global_defs.h"
+
+namespace {
+/* Persistent 3x3 symmetric nodal block inverses: 6 doubles per node
+ * [inv00, inv01, inv02, inv11, inv12, inv22] indexed at (node * 6). */
+std::vector<double> g_bi_block[MAX_LEVELS][NCS];
+int g_bi_block_nno[MAX_LEVELS][NCS] = {{0}};
+double g_cheb_lmax[MAX_LEVELS] = {0.0};
+} // namespace
+
+const double *get_block3x3_BI_ptr(int level, int cap, int *nno_out)
+{
+    if (level < 0 || level >= MAX_LEVELS || cap < 1 || cap >= NCS) {
+        if (nno_out) *nno_out = 0;
+        return nullptr;
+    }
+    if (nno_out) *nno_out = g_bi_block_nno[level][cap];
+    return g_bi_block[level][cap].empty() ? nullptr : g_bi_block[level][cap].data();
+}
+
+double get_chebyshev_lmax(int level)
+{
+    if (level < 0 || level >= MAX_LEVELS) return 0.0;
+    return g_cheb_lmax[level];
+}
+
+void set_chebyshev_lmax(int level, double lmax)
+{
+    if (level >= 0 && level < MAX_LEVELS)
+        g_cheb_lmax[level] = lmax;
+}
+
+void invalidate_chebyshev_lmax(void)
+{
+    for (int i = 0; i < MAX_LEVELS; i++)
+        g_cheb_lmax[i] = 0.0;
+}
+
+/* ======================================================================
+ * Build exact global 3x3 symmetric nodal block inverses K_ii^{-1} at each
+ * multigrid level. Must be called AFTER construct_node_ks() and BEFORE
+ * rebuild_BI_on_boundary(), while E->BI still stores exact global 1/K_dd
+ * on all nodes (interior and OFFSIDE boundary).
+ * ====================================================================== */
+void build_block3x3_BI(struct All_variables *E)
+{
+    if (strcmp(E->control.mg_smoother, "block3x3_gs") != 0 &&
+        strcmp(E->control.mg_smoother, "block3x3_sgs") != 0 &&
+        strcmp(E->control.mg_smoother, "chebyshev") != 0) {
+        return;
+    }
+
+    const int dims = E->mesh.nsd;
+    const int max_eqn = 14 * dims;
+
+    for (int level = E->mesh.gridmax; level >= E->mesh.gridmin; level--) {
+        const int nno = E->lmesh.NNO[level];
+        const int neq = E->lmesh.NEQ[level];
+
+        /* Pack local nodal off-diagonals (K12, K13, K23) into E->temp and
+         * exchange across MPI boundaries so boundary nodes also get exact
+         * global 3x3 blocks (required by Chebyshev smoother). */
+        for (int m = 1; m <= E->sphere.caps_per_proc; m++) {
+            for (int j = 0; j <= neq; j++)
+                E->temp[m][j] = 0.0;
+
+            const higher_precision *ek1 = E->Eqn_k1[level][m];
+            const higher_precision *ek2 = E->Eqn_k2[level][m];
+            const higher_precision *ek3 = E->Eqn_k3[level][m];
+            const struct ID *ID_m = E->ID[level][m];
+
+            for (int i = 1; i <= nno; i++) {
+                const size_t row_off = (size_t)(i - 1) * max_eqn;
+                const int eqn1 = ID_m[i].doff[1];
+                const int eqn2 = ID_m[i].doff[2];
+                const int eqn3 = ID_m[i].doff[3];
+                E->temp[m][eqn1] = 0.5 * ((double)ek1[row_off + 1] + (double)ek2[row_off + 0]); /* K12 */
+                E->temp[m][eqn2] = 0.5 * ((double)ek1[row_off + 2] + (double)ek3[row_off + 0]); /* K13 */
+                E->temp[m][eqn3] = 0.5 * ((double)ek2[row_off + 2] + (double)ek3[row_off + 1]); /* K23 */
+            }
+        }
+
+        (E->solver.exchange_id_d)(E, E->temp, level);
+
+        for (int m = 1; m <= E->sphere.caps_per_proc; m++) {
+            g_bi_block[level][m].resize((size_t)(nno + 1) * 6, 0.0);
+            g_bi_block_nno[level][m] = nno;
+
+            double * __restrict__ blk = g_bi_block[level][m].data();
+            const double * __restrict__ BI_m = E->BI[level][m];
+            const double * __restrict__ off_m = E->temp[m];
+            const unsigned int * __restrict__ NODE_m = E->NODE[level][m];
+            const struct ID * __restrict__ ID_m = E->ID[level][m];
+
+            for (int i = 1; i <= nno; i++) {
+                const unsigned int nf = NODE_m[i];
+                const int free1 = ((nf & VBX) == 0);
+                const int free2 = ((nf & VBY) == 0);
+                const int free3 = ((nf & VBZ) == 0);
+
+                const int eqn1 = ID_m[i].doff[1];
+                const int eqn2 = ID_m[i].doff[2];
+                const int eqn3 = ID_m[i].doff[3];
+
+                const double k11 = free1 ? (1.0 / BI_m[eqn1]) : 1.0;
+                const double k22 = free2 ? (1.0 / BI_m[eqn2]) : 1.0;
+                const double k33 = free3 ? (1.0 / BI_m[eqn3]) : 1.0;
+                const double k12 = (free1 && free2) ? off_m[eqn1] : 0.0;
+                const double k13 = (free1 && free3) ? off_m[eqn2] : 0.0;
+                const double k23 = (free2 && free3) ? off_m[eqn3] : 0.0;
+
+                const double c00 = k22 * k33 - k23 * k23;
+                const double c01 = k13 * k23 - k12 * k33;
+                const double c02 = k12 * k23 - k13 * k22;
+                const double c11 = k11 * k33 - k13 * k13;
+                const double c12 = k12 * k13 - k11 * k23;
+                const double c22 = k11 * k22 - k12 * k12;
+
+                const double det = k11 * c00 + k12 * c01 + k13 * c02;
+                const double diag_prod = k11 * k22 * k33;
+
+                double *b = blk + (size_t)i * 6;
+                if (det > 1.0e-12 * diag_prod && c00 > 0.0 && c11 > 0.0 && c22 > 0.0) {
+                    const double inv_det = 1.0 / det;
+                    b[0] = free1 ? (c00 * inv_det) : 0.0;
+                    b[1] = (free1 && free2) ? (c01 * inv_det) : 0.0;
+                    b[2] = (free1 && free3) ? (c02 * inv_det) : 0.0;
+                    b[3] = free2 ? (c11 * inv_det) : 0.0;
+                    b[4] = (free2 && free3) ? (c12 * inv_det) : 0.0;
+                    b[5] = free3 ? (c22 * inv_det) : 0.0;
+                } else {
+                    /* Safe diagonal fallback if block is nearly singular */
+                    b[0] = free1 ? BI_m[eqn1] : 0.0;
+                    b[1] = 0.0;
+                    b[2] = 0.0;
+                    b[3] = free2 ? BI_m[eqn2] : 0.0;
+                    b[4] = 0.0;
+                    b[5] = free3 ? BI_m[eqn3] : 0.0;
+                }
+            }
+        }
+    }
+}
 
 int layers_r(struct All_variables *,float );
 int layers(struct All_variables *,int ,int );
@@ -763,8 +906,11 @@ void construct_stiffness_B_matrix(struct All_variables *E)
 
   build_diagonal_of_Ahat(E);
 
-  if (E->control.NMULTIGRID || (E->control.NASSEMBLE && !E->control.CONJ_GRAD))
+  if (E->control.NMULTIGRID || (E->control.NASSEMBLE && !E->control.CONJ_GRAD)) {
+    build_block3x3_BI(E);
+    invalidate_chebyshev_lmax();
     rebuild_BI_on_boundary(E);
+  }
 
 
   return;
