@@ -118,7 +118,7 @@ static void vtk_output_temp(struct All_variables *E, FILE *fp)
 
     fprintf(fp, "        <DataArray type=\"Float32\" Name=\"temperature\" format=\"%s\">\n", E->output.vtk_format);
 
-    for(i=0;i <= nodes;i++)
+    for(i=0;i < nodes;i++)
         floattemp[i] =  (float) *(E->T[1]+i+1);
 
     if (strcmp(E->output.vtk_format,"binary") == 0) {
@@ -316,7 +316,8 @@ static void vtk_output_surf(struct All_variables *E,  FILE *fp, int cycles)
         write_ascii_array(nodes,1,floattopo,fp);
 
     fputs("        </DataArray>\n", fp);
-  return;
+    free(floattopo);
+    return;
 }
 
 
@@ -445,7 +446,9 @@ static void write_pvts(struct All_variables *E, int cycles)
         fprintf(fp,"      <DataArray type=\"Float32\" Name=\"stress\" NumberOfComponents=\"6\" format=\"%s\"/>\n", E->output.vtk_format);
     }
     if (E->output.comp_nd && E->composition.on){
-        fprintf(fp,"      <DataArray type=\"Float32\" Name=\"composition1\" format=\"%s\"/>\n", E->output.vtk_format);
+        for (int c = 0; c < E->composition.ncomp; c++) {
+            fprintf(fp,"      <DataArray type=\"Float32\" Name=\"composition%d\" format=\"%s\"/>\n", c + 1, E->output.vtk_format);
+        }
     }
     if (E->output.surf){
         fprintf(fp,"      <DataArray type=\"Float32\" Name=\"surface\" format=\"%s\"/>\n", E->output.vtk_format);
@@ -976,12 +979,17 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
     int NOZ = E->mesh.noz;
     int NNO_cap = NOX * NOY * NOZ;
 
+    const int has_comp_nd = (E->output.comp_nd && E->composition.on && E->composition.ncomp > 0) ? 1 : 0;
+    const int ncomp = has_comp_nd ? E->composition.ncomp : 0;
+
     /* 1. Extract local fields */
     float *local_coord = (float *)malloc(local_nno * 3 * sizeof(float));
     float *local_temp = (float *)malloc(local_nno * sizeof(float));
     float *local_velo = (float *)malloc(local_nno * 3 * sizeof(float));
     float *local_visc = (float *)malloc(local_nno * sizeof(float));
     float *local_stress = NULL;
+    float **local_comp = NULL;
+    float *local_surf = NULL;
 
     for (i = 0; i < local_nno; i++) {
         local_coord[i * 3 + 0] = (float)E->x[1][1][i + 1];
@@ -1018,12 +1026,41 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
         }
     }
 
+    if (has_comp_nd) {
+        local_comp = (float **)malloc(ncomp * sizeof(float *));
+        for (int c = 0; c < ncomp; c++) {
+            local_comp[c] = (float *)malloc(local_nno * sizeof(float));
+            for (i = 0; i < local_nno; i++) {
+                local_comp[c][i] = (float)E->composition.comp_node[1][c][i + 1];
+            }
+        }
+    }
+
+    if (E->output.surf) {
+        if ((E->output.write_q_files == 0) || (cycles == 0) ||
+            (cycles % E->output.write_q_files) != 0)
+            heat_flux(E);
+        if (E->control.use_cbf_topo) {
+            get_CBF_topo(E, E->slice.tpg, E->slice.tpgb);
+        } else {
+            get_STD_topo(E, E->slice.tpg, E->slice.tpgb, E->slice.divg, E->slice.vort, cycles);
+        }
+        local_surf = (float *)calloc(local_nno, sizeof(float));
+        if (E->parallel.me_loc[3] == E->parallel.nprocz - 1) {
+            for (i = 1; i <= E->lmesh.nsf; i++) {
+                local_surf[i * noz - 1] = E->control.pseudo_free_surf ? E->slice.freesurf[1][i] : E->slice.tpg[1][i];
+            }
+        }
+    }
+
     /* 2. Gather to cap leader */
     float *cap_coord = NULL;
     float *cap_temp = NULL;
     float *cap_velo = NULL;
     float *cap_visc = NULL;
     float *cap_stress = NULL;
+    float **cap_comp = NULL;
+    float *cap_surf = NULL;
 
     if (rank_in_cap == 0) {
         cap_coord = (float *)malloc(NNO_cap * 3 * sizeof(float));
@@ -1032,6 +1069,15 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
         cap_visc = (float *)malloc(NNO_cap * sizeof(float));
         if (E->output.stress) {
             cap_stress = (float *)malloc(NNO_cap * 6 * sizeof(float));
+        }
+        if (has_comp_nd) {
+            cap_comp = (float **)malloc(ncomp * sizeof(float *));
+            for (int c = 0; c < ncomp; c++) {
+                cap_comp[c] = (float *)malloc(NNO_cap * sizeof(float));
+            }
+        }
+        if (E->output.surf) {
+            cap_surf = (float *)calloc(NNO_cap, sizeof(float));
         }
 
         /* Insert rank 0's own data */
@@ -1055,6 +1101,13 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
                     if (cap_stress && local_stress) {
                         for (int c = 0; c < 6; c++)
                             cap_stress[6 * c_idx + c] = local_stress[6 * l_idx + c];
+                    }
+                    if (cap_comp && local_comp) {
+                        for (int c = 0; c < ncomp; c++)
+                            cap_comp[c][c_idx] = local_comp[c][l_idx];
+                    }
+                    if (cap_surf && local_surf) {
+                        cap_surf[c_idx] = local_surf[l_idx];
                     }
                 }
             }
@@ -1137,6 +1190,36 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
                     }
                 }
             }
+
+            /* Recv comp_nd */
+            if (has_comp_nd && cap_comp) {
+                for (int c = 0; c < ncomp; c++) {
+                    MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 110 + c, cap_comm, &st);
+                    for (j = 0; j < noy; j++) {
+                        for (i = 0; i < nox; i++) {
+                            for (k = 0; k < noz; k++) {
+                                int l_idx = k + i * noz + j * noz * nox;
+                                int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                                cap_comp[c][c_idx] = recv_buf[l_idx];
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* Recv surface */
+            if (E->output.surf && cap_surf) {
+                MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 106, cap_comm, &st);
+                for (j = 0; j < noy; j++) {
+                    for (i = 0; i < nox; i++) {
+                        for (k = 0; k < noz; k++) {
+                            int l_idx = k + i * noz + j * noz * nox;
+                            int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                            cap_surf[c_idx] = recv_buf[l_idx];
+                        }
+                    }
+                }
+            }
         }
         free(recv_buf);
 
@@ -1187,6 +1270,29 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
             fprintf(fp, "        </DataArray>\n");
         }
 
+        /* Nodal compositions (comp_nd) */
+        if (has_comp_nd && cap_comp) {
+            for (int c = 0; c < ncomp; c++) {
+                fprintf(fp, "        <DataArray type=\"Float32\" Name=\"composition%d\" format=\"%s\">\n",
+                        c + 1, E->output.vtk_format);
+                if (strcmp(E->output.vtk_format, "binary") == 0)
+                    write_binary_array(NNO_cap, cap_comp[c], fp);
+                else
+                    write_ascii_array(NNO_cap, 1, cap_comp[c], fp);
+                fprintf(fp, "        </DataArray>\n");
+            }
+        }
+
+        /* Surface topography */
+        if (E->output.surf && cap_surf) {
+            fprintf(fp, "        <DataArray type=\"Float32\" Name=\"surface\" format=\"%s\">\n", E->output.vtk_format);
+            if (strcmp(E->output.vtk_format, "binary") == 0)
+                write_binary_array(NNO_cap, cap_surf, fp);
+            else
+                write_ascii_array(NNO_cap, 1, cap_surf, fp);
+            fprintf(fp, "        </DataArray>\n");
+        }
+
         fprintf(fp, "      </PointData>\n");
         fprintf(fp, "      <CellData>\n      </CellData>\n");
         fprintf(fp, "      <Points>\n");
@@ -1207,6 +1313,11 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
         free(cap_velo);
         free(cap_visc);
         if (cap_stress) free(cap_stress);
+        if (cap_comp) {
+            for (int c = 0; c < ncomp; c++) free(cap_comp[c]);
+            free(cap_comp);
+        }
+        if (cap_surf) free(cap_surf);
 
     } else {
         /* Worker sends local buffers */
@@ -1217,6 +1328,14 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
         if (E->output.stress && local_stress) {
             MPI_Send(local_stress, local_nno * 6, MPI_FLOAT, 0, 105, cap_comm);
         }
+        if (has_comp_nd && local_comp) {
+            for (int c = 0; c < ncomp; c++) {
+                MPI_Send(local_comp[c], local_nno, MPI_FLOAT, 0, 110 + c, cap_comm);
+            }
+        }
+        if (E->output.surf && local_surf) {
+            MPI_Send(local_surf, local_nno, MPI_FLOAT, 0, 106, cap_comm);
+        }
     }
 
     free(local_coord);
@@ -1224,6 +1343,11 @@ static void vtk_output_cap(struct All_variables *E, int cycles)
     free(local_velo);
     free(local_visc);
     if (local_stress) free(local_stress);
+    if (local_comp) {
+        for (int c = 0; c < ncomp; c++) free(local_comp[c]);
+        free(local_comp);
+    }
+    if (local_surf) free(local_surf);
 
     MPI_Comm_free(&cap_comm);
 
@@ -1258,12 +1382,17 @@ static void vtk_output_single(struct All_variables *E, int cycles)
     int NNO_cap = NOX * NOY * NOZ;
     int caps = E->sphere.caps;
 
+    const int has_comp_nd = (E->output.comp_nd && E->composition.on && E->composition.ncomp > 0) ? 1 : 0;
+    const int ncomp = has_comp_nd ? E->composition.ncomp : 0;
+
     /* 1. Extract local fields */
     float *local_coord = (float *)malloc(local_nno * 3 * sizeof(float));
     float *local_temp = (float *)malloc(local_nno * sizeof(float));
     float *local_velo = (float *)malloc(local_nno * 3 * sizeof(float));
     float *local_visc = (float *)malloc(local_nno * sizeof(float));
     float *local_stress = NULL;
+    float **local_comp = NULL;
+    float *local_surf = NULL;
 
     for (i = 0; i < local_nno; i++) {
         local_coord[i * 3 + 0] = (float)E->x[1][1][i + 1];
@@ -1300,12 +1429,41 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         }
     }
 
+    if (has_comp_nd) {
+        local_comp = (float **)malloc(ncomp * sizeof(float *));
+        for (int c = 0; c < ncomp; c++) {
+            local_comp[c] = (float *)malloc(local_nno * sizeof(float));
+            for (i = 0; i < local_nno; i++) {
+                local_comp[c][i] = (float)E->composition.comp_node[1][c][i + 1];
+            }
+        }
+    }
+
+    if (E->output.surf) {
+        if ((E->output.write_q_files == 0) || (cycles == 0) ||
+            (cycles % E->output.write_q_files) != 0)
+            heat_flux(E);
+        if (E->control.use_cbf_topo) {
+            get_CBF_topo(E, E->slice.tpg, E->slice.tpgb);
+        } else {
+            get_STD_topo(E, E->slice.tpg, E->slice.tpgb, E->slice.divg, E->slice.vort, cycles);
+        }
+        local_surf = (float *)calloc(local_nno, sizeof(float));
+        if (E->parallel.me_loc[3] == E->parallel.nprocz - 1) {
+            for (i = 1; i <= E->lmesh.nsf; i++) {
+                local_surf[i * noz - 1] = E->control.pseudo_free_surf ? E->slice.freesurf[1][i] : E->slice.tpg[1][i];
+            }
+        }
+    }
+
     /* 2. Assemble on cap leader */
     float *cap_coord = NULL;
     float *cap_temp = NULL;
     float *cap_velo = NULL;
     float *cap_visc = NULL;
     float *cap_stress = NULL;
+    float **cap_comp = NULL;
+    float *cap_surf = NULL;
 
     if (rank_in_cap == 0) {
         cap_coord = (float *)malloc(NNO_cap * 3 * sizeof(float));
@@ -1314,6 +1472,15 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         cap_visc = (float *)malloc(NNO_cap * sizeof(float));
         if (E->output.stress) {
             cap_stress = (float *)malloc(NNO_cap * 6 * sizeof(float));
+        }
+        if (has_comp_nd) {
+            cap_comp = (float **)malloc(ncomp * sizeof(float *));
+            for (int c = 0; c < ncomp; c++) {
+                cap_comp[c] = (float *)malloc(NNO_cap * sizeof(float));
+            }
+        }
+        if (E->output.surf) {
+            cap_surf = (float *)calloc(NNO_cap, sizeof(float));
         }
 
         int xs = 0, ys = 0, zs = 0;
@@ -1336,6 +1503,13 @@ static void vtk_output_single(struct All_variables *E, int cycles)
                     if (cap_stress && local_stress) {
                         for (int c = 0; c < 6; c++)
                             cap_stress[6 * c_idx + c] = local_stress[6 * l_idx + c];
+                    }
+                    if (cap_comp && local_comp) {
+                        for (int c = 0; c < ncomp; c++)
+                            cap_comp[c][c_idx] = local_comp[c][l_idx];
+                    }
+                    if (cap_surf && local_surf) {
+                        cap_surf[c_idx] = local_surf[l_idx];
                     }
                 }
             }
@@ -1412,6 +1586,34 @@ static void vtk_output_single(struct All_variables *E, int cycles)
                     }
                 }
             }
+
+            if (has_comp_nd && cap_comp) {
+                for (int c = 0; c < ncomp; c++) {
+                    MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 210 + c, cap_comm, &st);
+                    for (j = 0; j < noy; j++) {
+                        for (i = 0; i < nox; i++) {
+                            for (k = 0; k < noz; k++) {
+                                int l_idx = k + i * noz + j * noz * nox;
+                                int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                                cap_comp[c][c_idx] = recv_buf[l_idx];
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (E->output.surf && cap_surf) {
+                MPI_Recv(recv_buf, local_nno, MPI_FLOAT, r, 206, cap_comm, &st);
+                for (j = 0; j < noy; j++) {
+                    for (i = 0; i < nox; i++) {
+                        for (k = 0; k < noz; k++) {
+                            int l_idx = k + i * noz + j * noz * nox;
+                            int c_idx = (r_zs + k) + (r_xs + i) * NOZ + (r_ys + j) * NOZ * NOX;
+                            cap_surf[c_idx] = recv_buf[l_idx];
+                        }
+                    }
+                }
+            }
         }
         free(recv_buf);
     } else {
@@ -1422,6 +1624,14 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         if (E->output.stress && local_stress) {
             MPI_Send(local_stress, local_nno * 6, MPI_FLOAT, 0, 205, cap_comm);
         }
+        if (has_comp_nd && local_comp) {
+            for (int c = 0; c < ncomp; c++) {
+                MPI_Send(local_comp[c], local_nno, MPI_FLOAT, 0, 210 + c, cap_comm);
+            }
+        }
+        if (E->output.surf && local_surf) {
+            MPI_Send(local_surf, local_nno, MPI_FLOAT, 0, 206, cap_comm);
+        }
     }
 
     free(local_coord);
@@ -1429,6 +1639,11 @@ static void vtk_output_single(struct All_variables *E, int cycles)
     free(local_velo);
     free(local_visc);
     if (local_stress) free(local_stress);
+    if (local_comp) {
+        for (int c = 0; c < ncomp; c++) free(local_comp[c]);
+        free(local_comp);
+    }
+    if (local_surf) free(local_surf);
     MPI_Comm_free(&cap_comm);
 
     /* 3. Gather all caps to global rank 0 and write monolithic .vtu */
@@ -1444,6 +1659,8 @@ static void vtk_output_single(struct All_variables *E, int cycles)
     float *all_velo = NULL;
     float *all_visc = NULL;
     float *all_stress = NULL;
+    float **all_comp = NULL;
+    float *all_surf = NULL;
 
     if (E->parallel.me == 0) {
         all_coord = (float *)malloc(total_points * 3 * sizeof(float));
@@ -1453,6 +1670,15 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         if (E->output.stress) {
             all_stress = (float *)malloc(total_points * 6 * sizeof(float));
         }
+        if (has_comp_nd) {
+            all_comp = (float **)malloc(ncomp * sizeof(float *));
+            for (int c = 0; c < ncomp; c++) {
+                all_comp[c] = (float *)malloc(total_points * sizeof(float));
+            }
+        }
+        if (E->output.surf) {
+            all_surf = (float *)malloc(total_points * sizeof(float));
+        }
 
         /* Copy cap 0 */
         memcpy(all_coord, cap_coord, NNO_cap * 3 * sizeof(float));
@@ -1461,6 +1687,13 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         memcpy(all_visc, cap_visc, NNO_cap * sizeof(float));
         if (all_stress && cap_stress) {
             memcpy(all_stress, cap_stress, NNO_cap * 6 * sizeof(float));
+        }
+        if (all_comp && cap_comp) {
+            for (int c = 0; c < ncomp; c++)
+                memcpy(all_comp[c], cap_comp[c], NNO_cap * sizeof(float));
+        }
+        if (all_surf && cap_surf) {
+            memcpy(all_surf, cap_surf, NNO_cap * sizeof(float));
         }
 
         /* Receive remaining caps from cap leaders */
@@ -1474,6 +1707,14 @@ static void vtk_output_single(struct All_variables *E, int cycles)
             if (all_stress) {
                 MPI_Recv(all_stress + c * NNO_cap * 6, NNO_cap * 6, MPI_FLOAT, leader_rank, 305, E->parallel.world, &st);
             }
+            if (all_comp) {
+                for (int comp_i = 0; comp_i < ncomp; comp_i++) {
+                    MPI_Recv(all_comp[comp_i] + c * NNO_cap, NNO_cap, MPI_FLOAT, leader_rank, 310 + comp_i, E->parallel.world, &st);
+                }
+            }
+            if (all_surf) {
+                MPI_Recv(all_surf + c * NNO_cap, NNO_cap, MPI_FLOAT, leader_rank, 306, E->parallel.world, &st);
+            }
         }
     } else if (rank_in_cap == 0) {
         /* Other cap leaders send to global rank 0 */
@@ -1484,6 +1725,14 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         if (E->output.stress && cap_stress) {
             MPI_Send(cap_stress, NNO_cap * 6, MPI_FLOAT, 0, 305, E->parallel.world);
         }
+        if (has_comp_nd && cap_comp) {
+            for (int comp_i = 0; comp_i < ncomp; comp_i++) {
+                MPI_Send(cap_comp[comp_i], NNO_cap, MPI_FLOAT, 0, 310 + comp_i, E->parallel.world);
+            }
+        }
+        if (E->output.surf && cap_surf) {
+            MPI_Send(cap_surf, NNO_cap, MPI_FLOAT, 0, 306, E->parallel.world);
+        }
     }
 
     if (cap_coord) free(cap_coord);
@@ -1491,6 +1740,11 @@ static void vtk_output_single(struct All_variables *E, int cycles)
     if (cap_velo) free(cap_velo);
     if (cap_visc) free(cap_visc);
     if (cap_stress) free(cap_stress);
+    if (cap_comp) {
+        for (int c = 0; c < ncomp; c++) free(cap_comp[c]);
+        free(cap_comp);
+    }
+    if (cap_surf) free(cap_surf);
 
     /* 4. Write monolithic .vtu file on global rank 0 */
     if (E->parallel.me == 0) {
@@ -1532,6 +1786,27 @@ static void vtk_output_single(struct All_variables *E, int cycles)
                 write_binary_array(total_points * 6, all_stress, fp);
             else
                 write_ascii_array(total_points * 6, 6, all_stress, fp);
+            fprintf(fp, "        </DataArray>\n");
+        }
+
+        if (has_comp_nd && all_comp) {
+            for (int c = 0; c < ncomp; c++) {
+                fprintf(fp, "        <DataArray type=\"Float32\" Name=\"composition%d\" format=\"%s\">\n",
+                        c + 1, E->output.vtk_format);
+                if (strcmp(E->output.vtk_format, "binary") == 0)
+                    write_binary_array(total_points, all_comp[c], fp);
+                else
+                    write_ascii_array(total_points, 1, all_comp[c], fp);
+                fprintf(fp, "        </DataArray>\n");
+            }
+        }
+
+        if (E->output.surf && all_surf) {
+            fprintf(fp, "        <DataArray type=\"Float32\" Name=\"surface\" format=\"%s\">\n", E->output.vtk_format);
+            if (strcmp(E->output.vtk_format, "binary") == 0)
+                write_binary_array(total_points, all_surf, fp);
+            else
+                write_ascii_array(total_points, 1, all_surf, fp);
             fprintf(fp, "        </DataArray>\n");
         }
         fprintf(fp, "      </PointData>\n");
@@ -1626,6 +1901,11 @@ static void vtk_output_single(struct All_variables *E, int cycles)
         free(all_velo);
         free(all_visc);
         if (all_stress) free(all_stress);
+        if (all_comp) {
+            for (int c = 0; c < ncomp; c++) free(all_comp[c]);
+            free(all_comp);
+        }
+        if (all_surf) free(all_surf);
 
         /* Write PVD */
         write_pvd(E, cycles);
