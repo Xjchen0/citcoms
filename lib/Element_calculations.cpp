@@ -1068,6 +1068,7 @@ void get_elt_f(struct All_variables *E, int el, double elt_f[24], int bcs, int m
       force_at_gs[j] += force[k] * E->N.vpt[GNVINDEX(k,j)] ;
     }
 
+  got_elt_k = 0;
   for(i=1;i<=dims;i++)  {
     for(a=1;a<=ends;a++)  {
       //nodea=E->ien[m][el].node[a];
@@ -1081,7 +1082,6 @@ void get_elt_f(struct All_variables *E, int el, double elt_f[24], int bcs, int m
 	  /* imposed velocity terms */
 
       if(bcs)  {
-        got_elt_k = 0;
         for(j=1;j<=dims;j++) {
 	  type=vbc_flag[j];
           for(b=1;b<=ends;b++) {
@@ -1089,6 +1089,8 @@ void get_elt_f(struct All_variables *E, int el, double elt_f[24], int bcs, int m
             if ((E->node[m][nodeb]&type)&&(E->sphere.cap[m].VB[j][nodeb]!=0.0)){
               if(!got_elt_k) {
                 get_elt_k(E,el,elt_k,E->mesh.levmax,m,1);
+                if (E->control.augmented_Lagr)
+                  get_aug_k(E,el,elt_k,E->mesh.levmax,m);
                 got_elt_k = 1;
                 }
               q = dims*(b-1)+j-1;

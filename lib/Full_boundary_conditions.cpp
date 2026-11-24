@@ -57,7 +57,7 @@ void full_velocity_boundary_conditions(struct All_variables *E)
   for(lv=E->mesh.gridmax;lv>=E->mesh.gridmin;lv--)
     for (j=1;j<=E->sphere.caps_per_proc;j++)     {
       noz = E->mesh.NOZ[lv];
-      if(E->mesh.topvbc != 1) {	/* free slip top */
+      if(E->mesh.topvbc == 0) {	/* free slip / traction top */
 	horizontal_bc(E,E->sphere.cap[j].VB,noz,1,0.0,VBX,0,lv,j);
 	horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,VBZ,1,lv,j);
 	horizontal_bc(E,E->sphere.cap[j].VB,noz,2,0.0,VBY,0,lv,j);
@@ -65,22 +65,15 @@ void full_velocity_boundary_conditions(struct All_variables *E)
 	horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,SBZ,0,lv,j);
 	horizontal_bc(E,E->sphere.cap[j].VB,noz,2,E->control.VBYtopval,SBY,1,lv,j);
 #ifdef USE_GGRD
-	/* Ggrd traction control */
-	if((lv==E->mesh.gridmax) && E->control.ggrd.vtop_control)
+	/* Ggrd traction control (call once across all local caps; skip if toplayerbc or restart handles it) */
+	if((lv==E->mesh.gridmax) && (j==E->sphere.caps_per_proc) &&
+	   E->control.ggrd.vtop_control && !E->mesh.toplayerbc &&
+	   !E->control.restart && !E->control.post_p)
 	  ggrd_read_vtop_from_file(E, TRUE);
 #endif
 
       }
-      if(E->mesh.botvbc != 1) {	/* free slip bottom */
-        horizontal_bc(E,E->sphere.cap[j].VB,1,1,0.0,VBX,0,lv,j);
-        horizontal_bc(E,E->sphere.cap[j].VB,1,3,0.0,VBZ,1,lv,j);
-        horizontal_bc(E,E->sphere.cap[j].VB,1,2,0.0,VBY,0,lv,j);
-        horizontal_bc(E,E->sphere.cap[j].VB,1,1,E->control.VBXbotval,SBX,1,lv,j);
-        horizontal_bc(E,E->sphere.cap[j].VB,1,3,0.0,SBZ,0,lv,j);
-        horizontal_bc(E,E->sphere.cap[j].VB,1,2,E->control.VBYbotval,SBY,1,lv,j);
-        }
-
-      if(E->mesh.topvbc == 1) {	/* velocity/no slip BC */
+      else if(E->mesh.topvbc == 1) {	/* velocity/no slip BC */
         horizontal_bc(E,E->sphere.cap[j].VB,noz,1,E->control.VBXtopval,VBX,1,lv,j);
         horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,VBZ,1,lv,j);
         horizontal_bc(E,E->sphere.cap[j].VB,noz,2,E->control.VBYtopval,VBY,1,lv,j);
@@ -89,22 +82,30 @@ void full_velocity_boundary_conditions(struct All_variables *E)
         horizontal_bc(E,E->sphere.cap[j].VB,noz,2,0.0,SBY,0,lv,j);
 
 #ifdef USE_GGRD
-	/* Ggrd velocity (and age) control (only for the top processors */
-	if((lv==E->mesh.gridmax) && E->control.ggrd.vtop_control)
+	/* Ggrd velocity (and age) control (call once across all local caps; skip if toplayerbc or restart handles it) */
+	if((lv==E->mesh.gridmax) && (j==E->sphere.caps_per_proc) &&
+	   E->control.ggrd.vtop_control && !E->mesh.toplayerbc &&
+	   !E->control.restart && !E->control.post_p)
 	  ggrd_read_vtop_from_file(E,TRUE);
 #endif
-
-        if(E->control.vbcs_file){ /* this should either only be called
-				     once, or the input routines need
-				     to be told what to do for each
-				     multigrid level and cap. it might
-				     be easiest to call only once and
-				     have routines deal with multigrid
-				  */
-	  if((lv == E->mesh.gridmin) && (j == E->sphere.caps_per_proc))
-	     read_velocity_boundary_from_file(E);
-	}
       }
+      else if(E->mesh.topvbc == 2) {	/* open top / pseudo_free_surf BC */
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,1,0.0,VBX,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,VBZ,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,2,0.0,VBY,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,1,E->control.VBXtopval,SBX,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,SBZ,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,2,E->control.VBYtopval,SBY,1,lv,j);
+      }
+
+      if(E->mesh.botvbc != 1) {	/* free slip bottom */
+        horizontal_bc(E,E->sphere.cap[j].VB,1,1,0.0,VBX,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,1,3,0.0,VBZ,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,1,2,0.0,VBY,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,1,1,E->control.VBXbotval,SBX,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,1,3,0.0,SBZ,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,1,2,E->control.VBYbotval,SBY,1,lv,j);
+        }
 
       if(E->mesh.botvbc == 1) {	/* velocity bottom BC */
         horizontal_bc(E,E->sphere.cap[j].VB,1,1,E->control.VBXbotval,VBX,1,lv,j);
@@ -119,22 +120,19 @@ void full_velocity_boundary_conditions(struct All_variables *E)
       if(E->control.side_sbcs)
 	apply_side_sbc(E);
 
-      /* if(E->control.verbose) { */
-      /*  for (j=1;j<=E->sphere.caps_per_proc;j++) */
-      /*    for (node=1;node<=E->lmesh.nno;node++) */
-      /*       fprintf(E->fp_out,"m=%d VB== %d %g %g %g flag %u %u %u\n",j,node,E->sphere.cap[j].VB[1][node],E->sphere.cap[j].VB[2][node],E->sphere.cap[j].VB[3][node],E->node[j][node]&VBX,E->node[j][node]&VBY,E->node[j][node]&VBZ); */
-      /*  fflush(E->fp_out); */
-      /* } */
-
-      /* If any imposed internal velocity structure it goes here */
-      
-      
       /*
 	apply stress or velocity boundary conditions, read from file
 	settings are to be implemented in those routines (will only do
-	anything at present, if E->mesh.toplayerbc != 0
+	anything at present, if E->mesh.toplayerbc != 0)
       */
       assign_internal_bc(E);
+
+      /* Read file-based velocity BCs after assign_internal_bc so internal layers
+       * are also populated; skip during restart/post_p until checkpoint elapsed_time is restored. */
+      if(E->mesh.topvbc == 1 && E->control.vbcs_file &&
+         !E->control.restart && !E->control.post_p) {
+        read_velocity_boundary_from_file(E);
+      }
       
       return;
 }
@@ -159,7 +157,8 @@ void full_temperature_boundary_conditions(struct All_variables *E)
       else
 	horizontal_bc(E,E->sphere.cap[j].TB,noz,3,E->control.TBCtopval,TBZ,1,lev,j);
       horizontal_bc(E,E->sphere.cap[j].TB,noz,3,E->control.TBCtopval,FBZ,0,lev,j);
-      if(E->control.tbcs_file)
+      if(E->control.tbcs_file && (j == E->sphere.caps_per_proc) &&
+         !E->control.restart && !E->control.post_p)
 	read_temperature_boundary_from_file(E);
     }
     else   {

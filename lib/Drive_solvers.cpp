@@ -78,12 +78,14 @@ void general_stokes_solver(struct All_variables *E)
 
   velocities_conform_bcs(E,E->U);
 
-  assemble_forces(E,0);
+  /* Update viscosity & stiffness BEFORE assemble_forces so -K_fb(eta)*u_b
+   * uses the current step's viscosity rather than the previous step's. */
   if(need_visc_update(E)){
     get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
     construct_stiffness_B_matrix(E);
-  } 
-  
+  }
+  assemble_forces(E,0);
+
   solve_constrained_flow_iterative(E);
 
   
@@ -126,6 +128,8 @@ void general_stokes_solver(struct All_variables *E)
       
       get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
       construct_stiffness_B_matrix(E);
+      /* Re-assemble RHS so prescribed-velocity terms -K_fb(eta_new)*u_b match the updated stiffness */
+      assemble_forces(E,0);
       solve_constrained_flow_iterative(E);
       
       E->monitor.visc_iter_count++;
@@ -139,9 +143,11 @@ void general_stokes_solver(struct All_variables *E)
 
   } /*end if we need iterations */
 
-  /* remove the rigid rotation component from the velocity solution */
+  /* remove the rigid rotation component from the velocity solution
+   * only when no velocity boundary condition (top/bottom) is prescribed */
   if((E->sphere.caps == 12) &&
-     (E->control.remove_rigid_rotation || E->control.remove_angular_momentum)) {
+     (E->control.remove_rigid_rotation || E->control.remove_angular_momentum) &&
+     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1)) {
       remove_rigid_rot(E);
   }
 
@@ -217,11 +223,11 @@ void general_stokes_solver_pseudo_surf(struct All_variables *E)
   E->monitor.topo_loop = 0;
   if(E->monitor.solution_cycles==0) std_timestep(E);
   while(E->monitor.stop_topo_loop == 0) {
-	  assemble_forces(E,0);
 	  if(need_visc_update(E)){
 	    get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
 	    construct_stiffness_B_matrix(E);
 	  }
+	  assemble_forces(E,0);
 	  solve_constrained_flow_iterative(E);
 
 	  if (E->viscosity.SDEPV || E->viscosity.PDEPV) {
@@ -260,6 +266,7 @@ void general_stokes_solver_pseudo_surf(struct All_variables *E)
 
 			  get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
 			  construct_stiffness_B_matrix(E);
+			  assemble_forces(E,0);
 			  solve_constrained_flow_iterative(E);
 
 			  count++;
@@ -274,9 +281,11 @@ void general_stokes_solver_pseudo_surf(struct All_variables *E)
 	  E->monitor.topo_loop++;
   }
 
-  /* remove the rigid rotation component from the velocity solution */
+  /* remove the rigid rotation component from the velocity solution
+   * only when no velocity boundary condition (top/bottom) is prescribed */
   if((E->sphere.caps == 12) &&
-     (E->control.remove_rigid_rotation || E->control.remove_angular_momentum)) {
+     (E->control.remove_rigid_rotation || E->control.remove_angular_momentum) &&
+     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1)) {
       remove_rigid_rot(E);
   }
 

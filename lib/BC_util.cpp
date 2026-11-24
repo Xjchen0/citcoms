@@ -224,18 +224,19 @@ void assign_internal_bc(struct All_variables *E)
 	  onbottom = ((k==1) && (E->parallel.me_loc[3]==0))?(1):(0);
 	  /* node number is k, assuming no dependence on x and y  */
 	  if(E->SX[lv][j][3][k] >= E->mesh.toplayerbc_r){
-	    if((!ontop)&&(!onbottom)&&(lv==E->mesh.gridmax))
-	      ncount++;		/* not in top or bottom */
-	    if(E->mesh.topvbc != 1) {	/* free slip */
+	    if(E->mesh.topvbc != 1) {	/* free slip / traction (surface only for SBX/SBY) */
 	      internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,0.0,VBX,0,lv,j);
 	      if(ontop || onbottom)
 		internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,VBZ,1,lv,j);
 	      internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,0.0,VBY,0,lv,j);
-	      internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,SBX,1,lv,j);
-	      if(ontop || onbottom)
+	      if(ontop || onbottom) {
+		internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,SBX,1,lv,j);
 		internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,SBZ,0,lv,j);
-	      internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,E->control.VBYtopval,SBY,1,lv,j);
-	    }else{		/* no slip */
+		internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,E->control.VBYtopval,SBY,1,lv,j);
+	      }
+	    }else{		/* prescribed velocity / no slip */
+	      if((!ontop)&&(!onbottom)&&(lv==E->mesh.gridmax))
+		ncount++;		/* not in top or bottom */
 	      internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,VBX,1,lv,j);
 	      if(ontop || onbottom)
 		internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,VBZ,1,lv,j);
@@ -250,39 +251,42 @@ void assign_internal_bc(struct All_variables *E)
       }
     /* read in velocities/stresses from grd file? */
 #ifdef USE_GGRD
-    if(E->control.ggrd.vtop_control)
+    if(E->control.ggrd.vtop_control && !E->control.restart && !E->control.post_p)
       ggrd_read_vtop_from_file(E, TRUE);
 #endif
     /* end toplayerbc > 0 branch */
   }else if(E->mesh.toplayerbc < 0){ 
-    /* internal node at noz-toplayerbc */
+    /* internal node at global NOZ[lv] + toplayerbc (scaled by multigrid level) */
     for(lv=E->mesh.gridmax;lv>=E->mesh.gridmin;lv--)
       for (j=1;j<=E->sphere.caps_per_proc;j++)     {
 	noz = E->lmesh.NOZ[lv];
-	/* we're looping through all nodes for the possibility that
-	   there are several internal processors which need BCs */
+	int gnoz = E->mesh.NOZ[lv];
+	int global_k;
 	if(lv == E->mesh.gridmax)
-	  k = noz + E->mesh.toplayerbc;
-	else{
-	  k = noz + (int)((float)E->mesh.toplayerbc / pow(2.,(float)(E->mesh.gridmax-lv)));
-	}
-	//fprintf(stderr,"BC_util: inner node: CPU: %i lv %i noz %i k %i\n",E->parallel.me,lv,noz,k);
-	if(k <= 1)
+	  global_k = gnoz + E->mesh.toplayerbc;
+	else
+	  global_k = gnoz + (int)((float)E->mesh.toplayerbc / pow(2.,(float)(E->mesh.gridmax-lv)));
+	if(global_k <= 1)
 	  myerror(E,"out of bounds for noz and toplayerbc");
+	/* Map global radial index to local processor range [1..noz]; skip ranks that do not own global_k */
+	k = global_k - E->lmesh.NZS[lv] + 1;
+	if(k < 1 || k > noz)
+	  continue;
 	ontop    = ((k==noz) && (E->parallel.me_loc[3]==E->parallel.nprocz-1))?(1):(0);
 	onbottom = ((k==1) && (E->parallel.me_loc[3]==0))?(1):(0);
-	if((!ontop)&&(!onbottom)&&(lv==E->mesh.gridmax))
-	  ncount++;		/* not in top or bottom */
-	if(E->mesh.topvbc != 1) {	/* free slip */
+	if(E->mesh.topvbc != 1) {	/* free slip / traction (surface only for SBX/SBY) */
 	  internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,0.0,VBX,0,lv,j);
 	  if(ontop || onbottom)
 	    internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,VBZ,1,lv,j);
 	  internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,0.0,VBY,0,lv,j);
-	  internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,SBX,1,lv,j);
-	  if(ontop || onbottom)
+	  if(ontop || onbottom) {
+	    internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,SBX,1,lv,j);
 	    internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,SBZ,0,lv,j);
-	  internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,E->control.VBYtopval,SBY,1,lv,j);
-	}else{		/* no slip */
+	    internal_horizontal_bc(E,E->sphere.cap[j].VB,k,2,E->control.VBYtopval,SBY,1,lv,j);
+	  }
+	}else{		/* prescribed velocity / no slip */
+	  if((!ontop)&&(!onbottom)&&(lv==E->mesh.gridmax))
+	    ncount++;		/* not in top or bottom */
 	  internal_horizontal_bc(E,E->sphere.cap[j].VB,k,1,E->control.VBXtopval,VBX,1,lv,j);
 	  if(ontop || onbottom)
 	    internal_horizontal_bc(E,E->sphere.cap[j].VB,k,3,0.0,VBZ,1,lv,j);
@@ -295,7 +299,7 @@ void assign_internal_bc(struct All_variables *E)
       }
     /* read in velocities/stresses from grd file? */
 #ifdef USE_GGRD
-    if(E->control.ggrd.vtop_control)
+    if(E->control.ggrd.vtop_control && !E->control.restart && !E->control.post_p)
       ggrd_read_vtop_from_file(E, TRUE);
 #endif
     /* end toplayerbc < 0 branch */

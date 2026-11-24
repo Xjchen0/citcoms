@@ -76,16 +76,45 @@ void full_read_input_files_for_timesteps(struct All_variables *E, int action, in
 
     age=find_age_in_MY(E);
 
-    if (age < 0.0) { /* age is negative -> use age=0 for input files */
+    if (age < 0.0f || ((action == 1 || action == 5) && age <= 1.0e-5f)) { /* age <= 0 -> use age=0 */
       intage = 0;
-      newage2 = newage1 = 0.0;
+      newage2 = newage1 = 0.0f;
       pos_age = 0;
     }
     else {
-      intage = age;
-      newage1 = 1.0*intage;
-      newage2 = 1.0*intage + 1.0;
-      pos_age = 1;
+      float rounded_age = floorf(age + 0.5f);
+      if ((action == 1 || action == 5) && fabsf(age - rounded_age) < 1.0e-5f) {
+        /* Exact integer age (e.g., age == start_age == 200.0 Ma): read single file,
+         * avoiding crash from non-existent (max_age + 1) file. */
+        intage = (int)rounded_age;
+        newage2 = newage1 = rounded_age;
+        pos_age = 0;
+      } else {
+        intage = (int)age;
+        newage1 = 1.0f * intage;
+        newage2 = 1.0f * intage + 1.0f;
+        pos_age = 1;
+      }
+    }
+
+    /* For velocity BCs (action == 1), check if this rank actually owns any surface
+     * or internal toplayerbc layer before opening ASCII files (avoids I/O storm on deep ranks). */
+    int need_vel_read = 1;
+    if (action == 1) {
+      need_vel_read = (E->parallel.me_loc[3] == E->parallel.nprocz - 1) ? 1 : 0;
+      if (!need_vel_read && E->mesh.toplayerbc > 0) {
+        for (int kz = 1; kz <= noz1; kz++) {
+          if (E->SX[E->mesh.levmax][1][3][kz] >= E->mesh.toplayerbc_r) {
+            need_vel_read = 1;
+            break;
+          }
+        }
+      } else if (!need_vel_read && E->mesh.toplayerbc < 0) {
+        int gk = E->mesh.noz + E->mesh.toplayerbc;
+        int lk = gk - E->lmesh.nzs + 1;
+        if (lk >= 1 && lk <= noz1)
+          need_vel_read = 1;
+      }
     }
 
     for (m=1;m<=E->sphere.caps_per_proc;m++)  {
@@ -97,18 +126,23 @@ void full_read_input_files_for_timesteps(struct All_variables *E, int action, in
 #ifdef USE_GGRD
 	if(!E->control.ggrd.vtop_control){
 #endif
-	sprintf(output_file1,"%s%0.0f.%d",E->control.velocity_boundary_file,newage1,cap);
-	sprintf(output_file2,"%s%0.0f.%d",E->control.velocity_boundary_file,newage2,cap);
+	if (!need_vel_read)
+	  break;
+	snprintf(output_file1, sizeof(output_file1), "%s%0.0f.%d", E->control.velocity_boundary_file, newage1, cap);
+	snprintf(output_file2, sizeof(output_file2), "%s%0.0f.%d", E->control.velocity_boundary_file, newage2, cap);
 	fp1=fopen(output_file1,"r");
 	if (fp1 == NULL) {
-          fprintf(E->fp,"(Problem_related #4) Cannot open %s\n",output_file1);
-          exit(8);
+          fprintf(stderr, "(Problem_related #4) Cannot open %s\n", output_file1);
+          if (E->fp) fprintf(E->fp,"(Problem_related #4) Cannot open %s\n",output_file1);
+          parallel_process_termination();
 	}
 	if (pos_age) {
 	  fp2=fopen(output_file2,"r");
 	  if (fp2 == NULL) {
-	    fprintf(E->fp,"(Problem_related #5) Cannot open %s\n",output_file2);
-	    exit(8);
+	    fprintf(stderr, "(Problem_related #5) Cannot open %s\n", output_file2);
+	    if (E->fp) fprintf(E->fp,"(Problem_related #5) Cannot open %s\n",output_file2);
+	    fclose(fp1);
+	    parallel_process_termination();
 	  }
 	}
 	if((E->parallel.me==0) && (output==1))   {
@@ -117,7 +151,7 @@ void full_read_input_files_for_timesteps(struct All_variables *E, int action, in
 	  if (pos_age)
 	    fprintf(E->fp,"Velocity: File2 = %s\n",output_file2);
 	  else
-	    fprintf(E->fp,"Velocity: File2 = No file inputted (negative age)\n");
+	    fprintf(E->fp,"Velocity: File2 = No file inputted (exact/non-positive age)\n");
 	}
 #ifdef USE_GGRD
 	}
@@ -222,50 +256,66 @@ void full_read_input_files_for_timesteps(struct All_variables *E, int action, in
 #ifdef USE_GGRD
 	if(!E->control.ggrd.vtop_control){ /* grd control is called from boundary conditions subroutine */
 #endif
+	if (!need_vel_read)
+	  break;
 	nnn=nox*noy;
-	for(i=1;i<=dims;i++)  {
+	for(i=1;i<=2;i++)  {
 	  VB1[i]=(float*) malloc ((nnn+1)*sizeof(float));
 	  VB2[i]=(float*) malloc ((nnn+1)*sizeof(float));
 	}
 	for(i=1;i<=nnn;i++)   {
           if(fscanf(fp1,"%f %f",&(VB1[1][i]),&(VB1[2][i])) != 2) {
             fprintf(stderr,"Error while reading file '%s'\n",output_file1);
-            exit(8);
+            fclose(fp1);
+            if (pos_age) fclose(fp2);
+            parallel_process_termination();
           }
 	  VB1[1][i] *= E->data.timedir;
 	  VB1[2][i] *= E->data.timedir;
 	  if (pos_age) {
             if(fscanf(fp2,"%f %f",&(VB2[1][i]),&(VB2[2][i])) != 2) {
               fprintf(stderr,"Error while reading file '%s'\n",output_file2);
-              exit(8);
+              fclose(fp1);
+              fclose(fp2);
+              parallel_process_termination();
             }
 	    VB2[1][i] *= E->data.timedir;
 	    VB2[2][i] *= E->data.timedir;
 	  }
-	  /* if( E->parallel.me ==0)
-	     fprintf(stderr,"%d %f  %f  %f  %f\n",i,VB1[1][i],VB1[2][i],VB2[1][i],VB2[2][i]); */
 	}
 	fclose(fp1);
 	if (pos_age) fclose(fp2);
 
-	if(E->parallel.me_loc[3]==E->parallel.nprocz-1 )  {
-          for(k=1;k<=noy1;k++)
-	    for(i=1;i<=nox1;i++)    {
-	      nodeg = E->lmesh.nxs+i-1 + (E->lmesh.nys+k-2)*nox;
-	      nodel = (k-1)*nox1*noz1 + (i-1)*noz1+noz1;
-	      if (pos_age) { /* positive ages - we must interpolate */
-		E->sphere.cap[m].VB[1][nodel] = (VB1[1][nodeg] + (VB2[1][nodeg]-VB1[1][nodeg])/(newage2-newage1)*(age-newage1))*E->data.scalev;
-		E->sphere.cap[m].VB[2][nodel] = (VB1[2][nodeg] + (VB2[2][nodeg]-VB1[2][nodeg])/(newage2-newage1)*(age-newage1))*E->data.scalev;
-		E->sphere.cap[m].VB[3][nodel] = 0.0;
+	{
+	  const int is_top_rank = (E->parallel.me_loc[3] == E->parallel.nprocz - 1);
+	  const int internal_lk = (E->mesh.toplayerbc < 0) ? (E->mesh.noz + E->mesh.toplayerbc - E->lmesh.nzs + 1) : -1;
+	  for (int kz = 1; kz <= noz1; kz++) {
+	    const int is_top_layer = (is_top_rank && kz == noz1);
+	    int assign_layer = is_top_layer;
+	    if (!assign_layer && E->mesh.toplayerbc > 0 && E->SX[E->mesh.levmax][m][3][kz] >= E->mesh.toplayerbc_r)
+	      assign_layer = 1;
+	    else if (!assign_layer && E->mesh.toplayerbc < 0 && kz == internal_lk)
+	      assign_layer = 1;
+	    if (!assign_layer)
+	      continue;
+	    for(k=1;k<=noy1;k++)
+	      for(i=1;i<=nox1;i++)    {
+		nodeg = E->lmesh.nxs+i-1 + (E->lmesh.nys+k-2)*nox;
+		nodel = (k-1)*nox1*noz1 + (i-1)*noz1 + kz;
+		if (pos_age) { /* interpolate between newage1 and newage2 */
+		  E->sphere.cap[m].VB[1][nodel] = (VB1[1][nodeg] + (VB2[1][nodeg]-VB1[1][nodeg])/(newage2-newage1)*(age-newage1))*E->data.scalev;
+		  E->sphere.cap[m].VB[2][nodel] = (VB1[2][nodeg] + (VB2[2][nodeg]-VB1[2][nodeg])/(newage2-newage1)*(age-newage1))*E->data.scalev;
+		}
+		else { /* exact or non-positive age */
+		  E->sphere.cap[m].VB[1][nodel] = VB1[1][nodeg] * E->data.scalev;
+		  E->sphere.cap[m].VB[2][nodel] = VB1[2][nodeg] * E->data.scalev;
+		}
+		if (is_top_layer)
+		  E->sphere.cap[m].VB[3][nodel] = 0.0;
 	      }
-	      else { /* negative ages - don't do the interpolation */
-		E->sphere.cap[m].VB[1][nodel] = VB1[1][nodeg] * E->data.scalev;
-		E->sphere.cap[m].VB[2][nodel] = VB1[2][nodeg] * E->data.scalev;
-		E->sphere.cap[m].VB[3][nodel] = 0.0;
-	      }
-	    }
-	}   /* end of E->parallel.me_loc[3]==E->parallel.nproczl-1   */
-	for(i=1;i<=dims;i++) {
+	  }
+	}
+	for(i=1;i<=2;i++) {
           free ((void *) VB1[i]);
           free ((void *) VB2[i]);
 	}

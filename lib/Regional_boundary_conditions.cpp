@@ -68,7 +68,9 @@ void regional_velocity_boundary_conditions(struct All_variables *E)
 
 #ifdef USE_GGRD
 	/* Ggrd traction control */
-	if((lv==E->mesh.gridmax) && E->control.ggrd.vtop_control)
+	if((lv==E->mesh.gridmax) && (j==E->sphere.caps_per_proc) &&
+	   E->control.ggrd.vtop_control && !E->mesh.toplayerbc &&
+	   !E->control.restart && !E->control.post_p)
 	  ggrd_read_vtop_from_file(E, TRUE);
 #endif
 
@@ -82,13 +84,11 @@ void regional_velocity_boundary_conditions(struct All_variables *E)
         horizontal_bc(E,E->sphere.cap[j].VB,noz,2,0.0,SBY,0,lv,j);
 #ifdef USE_GGRD
 	/* Ggrd velocity control */
-	if((lv==E->mesh.gridmax) && E->control.ggrd.vtop_control)
+	if((lv==E->mesh.gridmax) && (j==E->sphere.caps_per_proc) &&
+	   E->control.ggrd.vtop_control && !E->mesh.toplayerbc &&
+	   !E->control.restart && !E->control.post_p)
 	  ggrd_read_vtop_from_file(E, TRUE);
 #endif
-	if(E->control.vbcs_file)   {
-	  if((lv == E->mesh.gridmin) && (j == E->sphere.caps_per_proc))
-	    read_velocity_boundary_from_file(E);   /* read in the velocity boundary condition from file */
-	}
       }
       else if(E->mesh.topvbc == 2) {
 	/* This extra BC is for a open top */
@@ -136,6 +136,13 @@ void regional_velocity_boundary_conditions(struct All_variables *E)
       */
       assign_internal_bc(E);
 
+      /* Read file-based velocity BCs after velocity_refl_vert_bc & assign_internal_bc;
+       * skip during restart/post_p until checkpoint elapsed_time is restored. */
+      if(E->mesh.topvbc == 1 && E->control.vbcs_file &&
+         !E->control.restart && !E->control.post_p) {
+        read_velocity_boundary_from_file(E);
+      }
+
 
 
       if(E->control.verbose) {
@@ -174,7 +181,8 @@ void regional_temperature_boundary_conditions(struct All_variables *E)
     if(E->mesh.toptbc == 1)    {
       horizontal_bc(E,E->sphere.cap[j].TB,noz,3,E->control.TBCtopval,TBZ,1,lev,j);
       horizontal_bc(E,E->sphere.cap[j].TB,noz,3,E->control.TBCtopval,FBZ,0,lev,j);
-      if(E->control.tbcs_file)   {
+      if(E->control.tbcs_file && (j == E->sphere.caps_per_proc) &&
+         !E->control.restart && !E->control.post_p)   {
 	  read_temperature_boundary_from_file(E);   /* read in the temperature boundary condition from file */
 	}
       }
@@ -227,12 +235,14 @@ static void velocity_refl_vert_bc(struct All_variables *E)
 
         ii = i + E->lmesh.nzs - 1;
         if (E->parallel.me_loc[1]==0 )  {
-           E->sphere.cap[m].VB[1][node1] = 0.0;
+           if (!((ii == E->mesh.noz && E->mesh.topvbc == 1) || (ii == 1 && E->mesh.botvbc == 1)))
+              E->sphere.cap[m].VB[1][node1] = 0.0;
            if((ii != 1) && (ii != E->mesh.noz))
               E->sphere.cap[m].VB[3][node1] = 0.0;
                }
         if (E->parallel.me_loc[1]==E->parallel.nprocx-1)  {
-           E->sphere.cap[m].VB[1][node2] = 0.0;
+           if (!((ii == E->mesh.noz && E->mesh.topvbc == 1) || (ii == 1 && E->mesh.botvbc == 1)))
+              E->sphere.cap[m].VB[1][node2] = 0.0;
            if((ii != 1) && (ii != E->mesh.noz))
               E->sphere.cap[m].VB[3][node2] = 0.0;
            }
@@ -248,7 +258,8 @@ static void velocity_refl_vert_bc(struct All_variables *E)
           node1 = i + (j-1)*E->lmesh.noz;
           ii = i + E->lmesh.nzs - 1;
 
-          E->sphere.cap[m].VB[2][node1] = 0.0;
+          if (!((ii == E->mesh.noz && E->mesh.topvbc == 1) || (ii == 1 && E->mesh.botvbc == 1)))
+            E->sphere.cap[m].VB[2][node1] = 0.0;
           if((ii != 1) && (ii != E->mesh.noz))
             E->sphere.cap[m].VB[3][node1] = 0.0;
           }    /* end of loop i & j */
@@ -260,7 +271,8 @@ static void velocity_refl_vert_bc(struct All_variables *E)
           node2 = (E->lmesh.noy-1)*E->lmesh.noz*E->lmesh.nox + i + (j-1)*E->lmesh.noz;
           ii = i + E->lmesh.nzs - 1;
 
-          E->sphere.cap[m].VB[2][node2] = 0.0;
+          if (!((ii == E->mesh.noz && E->mesh.topvbc == 1) || (ii == 1 && E->mesh.botvbc == 1)))
+            E->sphere.cap[m].VB[2][node2] = 0.0;
           if((ii != 1) && (ii != E->mesh.noz))
             E->sphere.cap[m].VB[3][node2] = 0.0;
           }    /* end of loop i & j */

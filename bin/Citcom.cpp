@@ -134,6 +134,19 @@ int main(int argc, char **argv)
   if (E->control.restart) {
       /* the initial condition is from previous checkpoint */
       read_checkpoint(E);
+      /* Synchronize time-dependent boundary conditions to the restored elapsed_time */
+      if (E->control.mat_control == 1)
+          read_mat_from_file(E);
+#ifdef USE_GGRD
+      if (E->control.ggrd.ray_control)
+          read_rayleigh_from_file(E);
+      if (E->control.ggrd.vtop_control)
+          ggrd_read_vtop_from_file(E, TRUE);
+#endif
+      if (E->control.vbcs_file == 1)
+          read_velocity_boundary_from_file(E);
+      if (E->control.tbcs_file)
+          read_temperature_boundary_from_file(E);
       if(E->control.tracer && (E->trace.ic_method_for_flavors == 99)){
 	/* 
 	   if ggrd tracer input is selected, this will override
@@ -239,6 +252,32 @@ int main(int argc, char **argv)
 
     if(E->control.tracer==1)
       tracer_advection(E);
+
+    /* Update time-dependent material & boundary conditions for the new elapsed_time
+     * BEFORE solving the Stokes system so V(t_k), P(t_k) match VB(t_k) and T(t_k). */
+    if(E->control.mat_control==1)
+      read_mat_from_file(E);
+
+#ifdef USE_GGRD
+    /* updating local rayleigh number (based on Netcdf grds, the
+       rayleigh number may be modified laterally in the surface
+       layers) */
+    if(E->control.ggrd.ray_control)
+      read_rayleigh_from_file(E);
+    if(E->control.ggrd.vtop_control)
+      ggrd_read_vtop_from_file(E, TRUE);
+#endif
+
+    /* updating plate velocity boundary condition */
+    if(E->control.vbcs_file==1)
+      read_velocity_boundary_from_file(E);
+
+    /* updating plate temperature boundary condition */
+    if(E->control.tbcs_file) {
+      read_temperature_boundary_from_file(E);
+      temperatures_conform_bcs(E);
+    }
+
     general_stokes_solver(E);
 
     if(E->output.write_q_files)
@@ -289,31 +328,6 @@ int main(int argc, char **argv)
         E->control.last_checkpoint_walltime = CPU_time0();
         last_saved_checkpoint_cycle = E->monitor.solution_cycles;
     }
-    /* updating time-dependent material group
-     * if mat_control is 0, the material group has already been
-     * initialized in initial_conditions() */
-    if(E->control.mat_control==1)
-      read_mat_from_file(E);
-
-#ifdef USE_GGRD
-    /* updating local rayleigh number (based on Netcdf grds, the
-       rayleigh number may be modified laterally in the surface
-       layers) */
-    /* no counterpart in pyre */
-    if(E->control.ggrd.ray_control)
-      read_rayleigh_from_file(E);
-    if(E->control.ggrd.vtop_control)
-      ggrd_read_vtop_from_file(E, TRUE);
-
-#endif
-
-    /* updating plate velocity boundary condition */
-    if(E->control.vbcs_file==1)
-      read_velocity_boundary_from_file(E);
-
-    /* updating plate temperature boundary condition */
-    if(E->control.tbcs_file)
-      read_temperature_boundary_from_file(E);   
 
 
     if (E->parallel.me == 0)  {

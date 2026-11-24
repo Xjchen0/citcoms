@@ -900,9 +900,26 @@ void check_settings_consistency(struct All_variables *E)
        convection of global models. */
     if(E->sphere.caps == 12 &&
        (E->control.remove_angular_momentum || E->control.remove_rigid_rotation) &&
+       (E->mesh.topvbc == 1 || E->mesh.botvbc == 1)) {
+      if(E->parallel.me == 0)
+	 fprintf(stderr,"\nWARNING: Prescribed velocity BCs (topvbc=%d, botvbc=%d) conflict with remove_angular_momentum/remove_rigid_rotation; net-rotation removal will be skipped to preserve prescribed velocities.\n\n",
+                 E->mesh.topvbc, E->mesh.botvbc);
+    } else if(E->sphere.caps == 12 &&
+       (E->control.remove_angular_momentum || E->control.remove_rigid_rotation) &&
        (E->mesh.topvbc || E->mesh.botvbc || E->control.side_sbcs)) {
       if(E->parallel.me == 0)
-	 fprintf(stderr,"\nWARNING: The input parameters impose boundary velocity, but also remove angular momentum/rigid rotation!\n\n");
+	 fprintf(stderr,"\nWARNING: The input parameters impose boundary conditions, and also remove angular momentum/rigid rotation!\n\n");
+    }
+
+    if (E->parallel.me == 0) {
+      if (E->mesh.topvbc == 0 && (E->control.VBXtopval != 0.0 || E->control.VBYtopval != 0.0)) {
+        fprintf(stderr, "NOTE: topvbc=0 with non-zero topvbxval=%g, topvbyval=%g -> applied as surface shear traction (SBX/SBY).\n",
+                E->control.VBXtopval, E->control.VBYtopval);
+      }
+      if (E->mesh.botvbc == 0 && (E->control.VBXbotval != 0.0 || E->control.VBYbotval != 0.0)) {
+        fprintf(stderr, "NOTE: botvbc=0 with non-zero botvbxval=%g, botvbyval=%g -> applied as bottom shear traction (SBX/SBY).\n",
+                E->control.VBXbotval, E->control.VBYbotval);
+      }
     }
 
     /* no z_layer input found */
