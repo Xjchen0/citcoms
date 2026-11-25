@@ -1,6 +1,6 @@
 # citcoms_cpp: Modern C++17 Mantle Convection Simulation Engine
 
-[![Version: 0.2.0](https://img.shields.io/badge/Version-citcoms__cpp--v0.2.0-brightgreen.svg)](https://github.com/Xjchen0/citcoms_cpp/releases/tag/citcoms_cpp-v0.2.0)
+[![Version: 0.3.0](https://img.shields.io/badge/Version-citcoms__cpp--v0.3.0-brightgreen.svg)](https://github.com/Xjchen0/citcoms_cpp/releases/tag/citcoms_cpp-v0.3.0)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](COPYING)
 [![C++17](https://img.shields.io/badge/Language-C%2B%2B17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![CMake](https://img.shields.io/badge/Build-CMake%20%E2%89%A5%203.16-brightgreen.svg)](https://cmake.org)
