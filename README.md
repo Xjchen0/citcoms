@@ -83,6 +83,18 @@ This repository (`citcoms_cpp`) represents a complete architectural modernizatio
   - **Coupled $3\times 3$ Nodal Block Smoothers (`mg_smoother = block3x3_gs` / `block3x3_sgs`)** and **Rank-Count-Invariant Chebyshev Polynomial Smoother (`mg_smoother = chebyshev`)**.
   - **Coarse-Grid PCG (`coarse_solver = cg`)** and **Geometric-Mean Viscosity Coarsening (`visc_smooth_method = 4`)**.
 
+### 1.7 EarthByte Scientific & 4D Plate Assimilation Capabilities (Opt-in)
+* **4D Lithosphere, Slab & Internal Velocity Data Assimilation**:
+  - Time-dependent lithosphere thermal assimilation with age-dependent boundary layer depth (`lith_age_depth_function`), power-law blending (`lith_age_exponent`), minimum age clamping (`lith_age_min`), and deforming-region masking (`lith_age_stencil_value`).
+  - 3D thermal slab assimilation (`slab_assim`, `slab_assim_file`) and 3D dynamic internal velocity boundary conditions (`internal_vbcs_file`, `velocity_internal_file`) synchronized **before** each Stokes solve and upon checkpoint restart (eliminating the 1-step lag in upstream EarthByte).
+* **Extended Boussinesq Approximation (EBA) Depth-Dependent $Di$ Scaling**:
+  - Opt-in `eba_dis_scaling = on` loads depth-varying dissipation number scaling $Di(z)$ from column 5 of 5- or 7-column `refstate_file` for viscous, adiabatic, and latent heating while keeping `eba_dis_scaling = off` 100% compatible with legacy 7-column files.
+* **EarthByte Viscosity Structures**:
+  - Added 13 published mantle rheology laws: `rheol = 20–28` (Flament / Zhang / Bower / Rudolph EBA lower-mantle depth profiles) and `rheol = 112, 113, 117, 118` (Hassan et al.).
+* **Hybrid Tracers, Dynamic Topography Cutoff & Diagnostic Outputs**:
+  - Hybrid ratio/ambient tracer composition (`hybrid_method`), configurable tracer array buffer cushion (`tracer_cushion`), dynamic topography buoyancy depth cutoff (`remove_buoyancy_above_znode`), EarthByte time-control compatibility aliases (`storage_spacing_Myr`, `exit_at_present`), and 9 diagnostic outputs (`sten_temp`, `sten_velo`, `divv`, `tracer_dens`, `heating_visc_nd`, `heating_adi_nd`, `heating_latent_nd`, `temp_sph`, `comp_sph`).
+  - See the dedicated step-by-step guide: **[4D Plate & Slab Data Assimilation Tutorial (`docs/plate_assimilation_tutorial.md`)](docs/plate_assimilation_tutorial.md)**.
+
 ---
 
 ## 2. Directory Structure
@@ -104,6 +116,9 @@ citcoms_cpp/
 ├── visual/                 # Post-processing and visualization scripts
 │   ├── combine.py          # Volume combiner wrapper (delegates to C++)
 │   └── combinesurf.py      # Surface combiner wrapper (delegates to C++)
+├── docs/                   # Tutorials and scientific guides
+│   └── plate_assimilation_tutorial.md # 4D plate/slab data assimilation tutorial
+├── tests/                  # Automated regression & EarthByte feature test suites
 └── examples/               # Example configuration files and test cases
     ├── Regional/           # Regional mantle convection examples
     └── Full/               # Full sphere mantle convection examples
@@ -350,6 +365,51 @@ visc_smooth_method = 4          # 4 = geometric-mean element coarsening (preserv
 | `coarse_solver` | `gs`, `cg` | Coarsest-level solver at `levmin` |
 | `visc_smooth_method` | `0`, `1`, `2`, `3`, `4` | `4` adds geometric-mean element viscosity coarsening |
 
+### 6.8 EarthByte Scientific Features & Parameter Reference Tables
+All EarthByte capabilities are **strictly opt-in** (defaulting to legacy `citcoms_cpp` behavior) so existing `.cfg` files and 4/7-column `refstate_file` inputs remain 100% backward compatible. For complete file format specs, pyGPlates prep scripts, and ready-to-run `.cfg` templates, see **[docs/plate_assimilation_tutorial.md](docs/plate_assimilation_tutorial.md)**.
+
+#### (1) 4D Lithosphere, Slab & Internal Velocity Assimilation
+| Parameter | Default | Description |
+|---|---|---|
+| `lith_age_depth_function` | `off` | When `on`, computes age-dependent assimilation depth $z_{\text{lith}} = 2.32\sqrt{A^*}\cdot\texttt{lith\_age\_depth}$; when `off`, uses constant depth `lith_age_depth` |
+| `lith_age_exponent` | `-1.0` (unset) | Blending exponent $p$ in $\mathrm{daf} = (z/z_{\text{lith}})^p$ (`0.5` recommended in EarthByte, `1.0` linear, `0.0` disables interior blending; unset `< 0` preserves legacy CIG $0.5 z/z_{\text{lith}}$) |
+| `lith_age_min` | `0.0` | Minimum lithosphere age clamp in Myr (prevents $\sqrt{0}$ singularity at mid-ocean ridges) |
+| `lith_age_stencil_value` | `-999.0` | Nodes with age $\le$ this value (Myr) skip lithosphere thermal assimilation (e.g. GPlates deforming zones) |
+| `slab_assim` | `off` | Enable 3D time-dependent thermal slab assimilation (`T = (1 - alpha)*T + alpha*T_slab`) |
+| `slab_assim_file` | `""` | Prefix for 3D slab files (`<prefix><age>.<cap>` for Full, `<prefix><age>` for Regional; 2 cols: `T_slab alpha`) |
+| `internal_vbcs_file` | `off` | Enable 3D time-dependent internal velocity BCs across all multigrid levels (synchronized before each Stokes solve and on restart) |
+| `velocity_internal_file` | `""` | Prefix for 3D internal velocity files (`<prefix><age>.<cap>` / `<prefix><age>`; 4 cols: `v_theta v_phi v_r flag` where `flag`: `0`=free, `1`=prescribe, `2`=skip boundary) |
+| `topvbc` | `0` | Regional models additionally support `topvbc = 3` (open-top vertical traction with zero horizontal slip, Bower et al., 2011) |
+
+#### (2) EBA Depth-Dependent $Di$ Scaling, Dynamic Topography & Time Compatibility
+| Parameter | Default | Description |
+|---|---|---|
+| `eba_dis_scaling` | `off` | When `on`, reads column 5 of `refstate_file` (5- or 7-column) as depth-dependent $Di(z)$ multiplier for viscous, adiabatic, and latent heating |
+| `remove_buoyancy_above_znode` | `10000` | Zeros thermal and chemical buoyancy for all global radial nodes `gz > threshold` (for dynamic topography excluding shallow lithosphere) |
+| `storage_spacing_Myr` | `0` | EarthByte compatibility alias mapped to `storage_interval_myr` (inherits `citcoms_cpp` exact time-step snapping) |
+| `exit_at_present` | `off` | Terminates forward convection (`timedir >= 0`) cleanly upon reaching `0.0 Ma` (snaps exactly to `0.0 Ma` when `exact_time_output = on`) |
+
+#### (3) EarthByte Viscosity Structures (`rheol`)
+| `rheol` | Lower-Mantle Profile (`l = 3`) & Formulation | Reference |
+|---|---|---|
+| `20` | $\eta = N_0 \exp\!\big(\frac{E}{T+T_0} - \frac{E}{0.5+T_0}\big)$, $T \in [0, 1]$ | Flament et al. (2013, 2014) |
+| `21`, `22`, `23` | Same as `20` with linear lower-mantle $N_0(z)$: `10->50` (`21`), `10->100` (`22`), `10->30` (`23`) | Flament et al. (2014) TC8/TC7/TC9 |
+| `24` | Frank-Kamenetskii $\eta = N_0(z)\exp(E(T_0 - T))$, linear lower-mantle $N_0(z)$ from `2` | Zhang et al. (2010), Bower et al. (2013) |
+| `25`, `26`, `28` | EBA `20` variants with lower-mantle $N_0(z)$: `5->100` (`25`), `5->80` (`26`), `2->100` (`28`) | Flament EBA suite |
+| `27` | EBA `20` variant with lower-mantle $N_0(z)$ linear `10->100` between 1000–2867 km | Rudolph et al. (2015) |
+| `112`, `113`, `117`, `118` | Exponential lower-mantle profile (`112`), depth-varying activation + LTBL clip (`113`), Arrhenius `rheol=7` with `[0,1]` clamp & optional UTBL clip (`117`/`118`) | Hassan et al. |
+
+#### (4) Hybrid Tracers & Diagnostic Output Tokens (`output_optional` / `output_optional_ascii`)
+| Parameter / Output Token | Default | Description |
+|---|---|---|
+| `hybrid_method` | `off` | In ratio method (`buoy_type = 1`), empty elements receive `C = 0.0` (ambient) instead of retaining previous composition or aborting |
+| `tracer_cushion` | `100000` | Extra per-rank tracer buffer capacity when loading `tracer_file` (reduces dynamic reallocations) |
+| `sten_temp`, `sten_velo` | off | Output 3D nodal thermal slab stencil (`slab_sten`) and internal velocity stencil (`slab_sten2`) |
+| `divv` | off | Output normalized nodal velocity divergence $\sqrt{\|\nabla\cdot\mathbf{u}\|^2 / \|\mathbf{u}\|^2}$ |
+| `tracer_dens` | off | Output volume-normalized nodal tracer density (`E->trace.dens_node`) |
+| `heating_visc_nd`, `heating_adi_nd`, `heating_latent_nd` | off | Output nodal-projected viscous, adiabatic, and latent heating fields |
+| `temp_sph`, `comp_sph` | off | Output radial-layer spherical harmonic expansions of temperature and composition up to `output_ll_max` (Full spherical mode) |
+
 ---
 
 ## 7. License & Citation
@@ -357,5 +417,7 @@ visc_smooth_method = 4          # 4 = geometric-mean element coarsening (preserv
 CitcomS is free and open-source software distributed under the terms of the **GNU General Public License v2 (GPL-2.0)**. See the [COPYING](COPYING) file for full details.
 
 ### Citation
-If you use CitcomS in your research, please cite:
+If you use CitcomS or its 4D plate assimilation features in your research, please cite:
 > Moresi, L., Zhong, S., Han, L., Conrad, C., Tan, E., Gurnis, M., Choi, E., Thoutireddy, P., Manea, V., McNamara, A., Becker, T., Leng, W., & Armendariz, L. (2014). *CitcomS v3.3.1*. Zenodo. [https://doi.org/10.5281/zenodo.7271920](https://doi.org/10.5281/zenodo.7271920)
+>
+> Bower, D. J., Gurnis, M., & Flament, N. (2015). *Assimilating lithosphere and slab history in 4-D Earth models*. Physics of the Earth and Planetary Interiors, 238, 8–22. [https://doi.org/10.1016/j.pepi.2014.10.013](https://doi.org/10.1016/j.pepi.2014.10.013)
