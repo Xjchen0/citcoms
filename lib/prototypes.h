@@ -44,6 +44,7 @@ void drex_eigen(double [3][3], double [3][3], int *);
 void malmul_scaled_id(double [3][3], double [3][3], double, double);
 void myerror_s(const char *, struct All_variables *);
 /* BC_util.c */
+void internal_velocity_bc(struct All_variables *);
 void internal_horizontal_bc(struct All_variables *, float *[], int, int, float, unsigned int, char, int, int);
 void strip_bcs_from_residual(struct All_variables *, double **, int);
 void temperatures_conform_bcs(struct All_variables *);
@@ -63,6 +64,7 @@ void write_composition_instructions(struct All_variables *);
 void fill_composition(struct All_variables *);
 void init_composition(struct All_variables *);
 void map_composition_to_nodes(struct All_variables *);
+void map_tracer_dens_to_nodes(struct All_variables *);
 void get_bulk_composition(struct All_variables *);
 /* Construct_arrays.c */
 void construct_ien(struct All_variables *);
@@ -137,6 +139,7 @@ void full_set_3dc_defaults(struct All_variables *);
 void full_set_3dsphere_defaults(struct All_variables *);
 /* Full_lith_age_read_files.c */
 void full_lith_age_read_files(struct All_variables *, int);
+void full_slab_temperature_read_files(struct All_variables *, int);
 /* Full_parallel_related.c */
 void full_parallel_processor_setup(struct All_variables *);
 void full_parallel_domain_decomp0(struct All_variables *);
@@ -269,6 +272,7 @@ void lith_age_update_tbc(struct All_variables *);
 void lith_age_temperature_bound_adj(struct All_variables *, int);
 void lith_age_conform_tbc(struct All_variables *);
 void assimilate_lith_conform_bcs(struct All_variables *);
+void assimilate_slab_conform_bcs(struct All_variables *);
 /* Material_properties.c */
 void mat_prop_allocate(struct All_variables *);
 void reference_state(struct All_variables *);
@@ -305,9 +309,18 @@ void output_seismic(struct All_variables *, int);
 void output_mat(struct All_variables *);
 void output_pressure(struct All_variables *, int);
 void output_tracer(struct All_variables *, int);
+void output_tracer_dens(struct All_variables *, int);
 void output_comp_nd(struct All_variables *, int);
 void output_comp_el(struct All_variables *, int);
 void output_heating(struct All_variables *, int);
+void output_heating_visc_nd(struct All_variables *, int);
+void output_heating_adi_nd(struct All_variables *, int);
+void output_heating_latent_nd(struct All_variables *, int);
+void output_sten_temp(struct All_variables *, int);
+void output_sten_velo(struct All_variables *, int);
+void output_divv(struct All_variables *, int);
+void output_temp_sph(struct All_variables *, int);
+void output_comp_sph(struct All_variables *, int);
 void output_time(struct All_variables *, int);
 #ifdef USE_GZDIR
 /* Output_gzdir.c */
@@ -403,6 +416,8 @@ void phase_change_apply_670(struct All_variables *, double **);
 void phase_change_apply_cmb(struct All_variables *, double **);
 /* Problem_related.c */
 void read_velocity_boundary_from_file(struct All_variables *);
+void read_internal_velocity_from_file(struct All_variables *);
+void read_slab_temperature_from_file(struct All_variables *);
 void read_rayleigh_from_file(struct All_variables *);
 void read_mat_from_file(struct All_variables *);
 void read_temperature_boundary_from_file(struct All_variables *);
@@ -424,6 +439,7 @@ void regional_set_3dc_defaults(struct All_variables *);
 void regional_set_3dsphere_defaults(struct All_variables *);
 /* Regional_lith_age_read_files.c */
 void regional_lith_age_read_files(struct All_variables *, int);
+void regional_slab_temperature_read_files(struct All_variables *, int);
 /* Regional_parallel_related.c */
 void regional_parallel_processor_setup(struct All_variables *);
 void regional_parallel_domain_decomp0(struct All_variables *);

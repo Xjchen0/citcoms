@@ -99,6 +99,15 @@ void regional_velocity_boundary_conditions(struct All_variables *E)
         horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,SBZ,1,lv,j);
         horizontal_bc(E,E->sphere.cap[j].VB,noz,2,E->control.VBYtopval,SBY,1,lv,j);
         }
+      else if(E->mesh.topvbc == 3) {
+        /* EarthByte (Bower et al., 2011): open-top box with zero horizontal slip */
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,1,0.0,VBX,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,VBZ,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,2,0.0,VBY,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,1,E->control.VBXtopval,SBX,0,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,3,0.0,SBZ,1,lv,j);
+        horizontal_bc(E,E->sphere.cap[j].VB,noz,2,E->control.VBYtopval,SBY,0,lv,j);
+        }
 
 
 
@@ -141,6 +150,12 @@ void regional_velocity_boundary_conditions(struct All_variables *E)
       if(E->mesh.topvbc == 1 && E->control.vbcs_file &&
          !E->control.restart && !E->control.post_p) {
         read_velocity_boundary_from_file(E);
+      }
+
+      /* EarthByte: internal velocity boundary condition assimilation */
+      if(E->control.internal_vbcs_file &&
+         !E->control.restart && !E->control.post_p) {
+        internal_velocity_bc(E);
       }
 
 

@@ -722,10 +722,11 @@ double global_div_norm2(struct All_variables *E,  double **A)
     for (m=1; m<=E->sphere.caps_per_proc; m++)
         for (i=1; i<=E->lmesh.npno; i++) {
             /* L2 norm of div(u) */
-            temp += A[m][i] * A[m][i] / E->eco[m][i].area;
-
-            /* L1 norm */
-            /*temp += fabs(A[m][i]);*/
+            const double d2 = A[m][i] * A[m][i] / E->eco[m][i].area;
+            temp += d2;
+            if (E->output.divv && E->div_norm2[m]) {
+                E->div_norm2[m][i] = d2 / E->eco[m][i].area;
+            }
         }
 
     MPI_Allreduce(&temp, &prod, 1, MPI_DOUBLE, MPI_SUM, E->parallel.world);
@@ -770,15 +771,20 @@ void global_stokes_norms(struct All_variables *E,
         const double * __restrict__ dPm = dP[m];
         const double * __restrict__ divm = divV[m];
         const struct COORD * __restrict__ ecom = E->eco[m];
+        double * __restrict__ divn2 = (E->output.divv ? E->div_norm2[m] : NULL);
         double sp = 0.0, sdp = 0.0, sdiv = 0.0;
         for (i=1; i<=npno; i++) {
             const double area = ecom[i].area;
             const double p  = Pm[i];
             const double dp = dPm[i];
             const double dv = divm[i];
+            const double d2 = (dv * dv) / area;
             sp   += p * p * area;
             sdp  += dp * dp * area;
-            sdiv += (dv * dv) / area;
+            sdiv += d2;
+            if (divn2) {
+                divn2[i] = d2 / area;
+            }
         }
         local[1] += sp;
         local[3] += sdp;

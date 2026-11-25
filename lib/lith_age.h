@@ -30,6 +30,8 @@ void lith_age_init(struct All_variables *);
 void lith_age_construct_tic(struct All_variables *) ;
 void lith_age_temperature_bound_adj(struct All_variables *, int);
 void lith_age_conform_tbc(struct All_variables *);
+void assimilate_lith_conform_bcs(struct All_variables *);
+void assimilate_slab_conform_bcs(struct All_variables *);
 float erft_age(float , float, struct All_variables *);
 void set_lith_age_for_t_and_tbc(struct All_variables *,int);
 int in_lith_age_depth(float ,float, float *,struct All_variables *);

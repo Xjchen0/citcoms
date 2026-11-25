@@ -79,9 +79,13 @@ void general_stokes_solver(struct All_variables *E)
   velocities_conform_bcs(E,E->U);
 
   /* Update viscosity & stiffness BEFORE assemble_forces so -K_fb(eta)*u_b
-   * uses the current step's viscosity rather than the previous step's. */
+   * uses the current step's viscosity rather than the previous step's.
+   * Also rebuild stiffness/diagonal when internal_vbcs_file dynamically updates
+   * interior VBX/VBY/VBZ boundary flags. */
   if(need_visc_update(E)){
     get_system_viscosity(E,1,E->EVI[E->mesh.levmax],E->VI[E->mesh.levmax]);
+    construct_stiffness_B_matrix(E);
+  } else if (E->control.internal_vbcs_file) {
     construct_stiffness_B_matrix(E);
   }
   assemble_forces(E,0);
@@ -144,10 +148,11 @@ void general_stokes_solver(struct All_variables *E)
   } /*end if we need iterations */
 
   /* remove the rigid rotation component from the velocity solution
-   * only when no velocity boundary condition (top/bottom) is prescribed */
+   * only when no velocity boundary condition (top/bottom/internal) is prescribed */
   if((E->sphere.caps == 12) &&
      (E->control.remove_rigid_rotation || E->control.remove_angular_momentum) &&
-     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1)) {
+     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1) &&
+     (!E->control.internal_vbcs_file)) {
       remove_rigid_rot(E);
   }
 
@@ -282,10 +287,11 @@ void general_stokes_solver_pseudo_surf(struct All_variables *E)
   }
 
   /* remove the rigid rotation component from the velocity solution
-   * only when no velocity boundary condition (top/bottom) is prescribed */
+   * only when no velocity boundary condition (top/bottom/internal) is prescribed */
   if((E->sphere.caps == 12) &&
      (E->control.remove_rigid_rotation || E->control.remove_angular_momentum) &&
-     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1)) {
+     (E->mesh.topvbc != 1) && (E->mesh.botvbc != 1) &&
+     (!E->control.internal_vbcs_file)) {
       remove_rigid_rot(E);
   }
 

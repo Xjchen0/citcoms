@@ -68,6 +68,11 @@ struct TRACE{
     int nflavors;
     int **ntracer_flavor[13];
 
+    /* EarthByte: tracer density fields & buffer cushion */
+    int icushion;
+    double *dens_el[13];
+    double *dens_node[13];
+
     /* tracer strain */
     int track_strain; 
     int erase_strain;

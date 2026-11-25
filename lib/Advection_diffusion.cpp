@@ -209,6 +209,12 @@ void std_timestep(struct All_variables *E)
         gap = E->control.end_time - E->monitor.elapsed_time;
         if (gap > 1.0e-7 * E->control.end_time && gap < min_gap)
           min_gap = gap;
+      } else if (E->control.exit_at_present && E->data.timedir >= 0 &&
+                 E->control.start_age > 0.0 && E->data.scalet > 0.0) {
+        double present_time = (double)E->control.start_age / (double)E->data.scalet;
+        gap = present_time - E->monitor.elapsed_time;
+        if (gap > 1.0e-7 * present_time && gap < min_gap)
+          min_gap = gap;
       }
       if (min_gap < (double)E->advection.timestep) {
         E->advection.timestep = (float)min_gap;
@@ -341,6 +347,11 @@ void PG_timestep_solve(struct All_variables *E)
     lith_age_conform_tbc(E);
     assimilate_lith_conform_bcs(E);
     
+  }
+  if(E->control.slab_assim) {
+    if(E->parallel.me==0 && E->control.verbose)
+      fprintf(stderr,"PG_timestep_solve - slab_assim adjust\n");
+    assimilate_slab_conform_bcs(E);
   }
   return;
 }
@@ -822,8 +833,8 @@ static void process_visc_heating(struct All_variables *E, int m,
                                  double *heating)
 {
     /* modern c++: void strain_rate_2_inv() prototype in header */
-    int e, i;
-    double visc, temp;
+    int e, ez, i;
+    double visc, temp, matprop;
     float *strain_sqr;
     const int vpts = VPOINTS3D;
 
@@ -835,11 +846,13 @@ static void process_visc_heating(struct All_variables *E, int m,
     strain_rate_2_inv(E, m, strain_sqr, 0);
 
     for(e=1; e<=E->lmesh.nel; e++) {
+        ez = (e - 1) % E->lmesh.elz + 1;
+        matprop = 0.5 * (E->refstate.dis[ez] + E->refstate.dis[ez + 1]);
         visc = 0.0;
         for(i = 1; i <= vpts; i++)
             visc += E->EVi[m][(e-1)*vpts + i];
 
-        heating[e] = temp * visc * strain_sqr[e];
+        heating[e] = matprop * temp * visc * strain_sqr[e];
     }
 
     free(strain_sqr);
@@ -858,9 +871,10 @@ static void process_adi_heating(struct All_variables *E, int m,
     temp2 = E->control.disptn_number / ends;
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        matprop = 0.125
+        matprop = 0.0625
             * (E->refstate.thermal_expansivity[ez] +
                E->refstate.thermal_expansivity[ez + 1])
+            * (E->refstate.dis[ez] + E->refstate.dis[ez + 1])
             * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
             * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
 
@@ -894,9 +908,10 @@ static void latent_heating(struct All_variables *E, int m,
 
     for(e=1; e<=E->lmesh.nel; e++) {
         ez = (e - 1) % E->lmesh.elz + 1;
-        matprop = 0.125
+        matprop = 0.0625
             * (E->refstate.thermal_expansivity[ez] +
                E->refstate.thermal_expansivity[ez + 1])
+            * (E->refstate.dis[ez] + E->refstate.dis[ez + 1])
             * (E->refstate.rho[ez] + E->refstate.rho[ez + 1])
             * (E->refstate.gravity[ez] + E->refstate.gravity[ez + 1]);
 

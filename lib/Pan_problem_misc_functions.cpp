@@ -158,15 +158,20 @@ void get_buoyancy(struct All_variables *E, double **buoy)
     /* Rayleigh number (can be negative for time reversal) */
     temp = E->control.Atemp;
 
-    /* thermal buoyancy */
+    /* thermal buoyancy (with optional EarthByte remove_buoyancy_above_znode cutoff) */
     for(m=1;m<=E->sphere.caps_per_proc;m++)
       for(i=1;i<=E->lmesh.nno;i++) {
 	nz = ((i-1) % E->lmesh.noz) + 1;
+	int gz = E->lmesh.nzs + nz - 1;
         /* We don't need to substract adiabatic T profile from T here,
          * since the horizontal average of buoy will be removed.
          */
-        buoy[m][i] =  temp * E->refstate.rho[nz]
-	  * E->refstate.thermal_expansivity[nz] * E->T[m][i];
+	if (gz <= E->control.remove_buoyancy_above_znode) {
+          buoy[m][i] =  temp * E->refstate.rho[nz]
+	    * E->refstate.thermal_expansivity[nz] * E->T[m][i];
+	} else {
+          buoy[m][i] = 0.0;
+	}
       }
     
     /* chemical buoyancy */
@@ -176,8 +181,12 @@ void get_buoyancy(struct All_variables *E, double **buoy)
 	/* TODO: how to scale chemical buoyancy wrt reference density? */
 	temp2 = E->composition.buoyancy_ratio[j] * temp;
             for(m=1;m<=E->sphere.caps_per_proc;m++)
-	      for(i=1;i<=E->lmesh.nno;i++)
-		buoy[m][i] -= temp2 * E->composition.comp_node[m][j][i];
+	      for(i=1;i<=E->lmesh.nno;i++) {
+		nz = ((i-1) % E->lmesh.noz) + 1;
+		int gz = E->lmesh.nzs + nz - 1;
+		if (gz <= E->control.remove_buoyancy_above_znode)
+		  buoy[m][i] -= temp2 * E->composition.comp_node[m][j][i];
+	      }
       }
     }
 #ifdef USE_GGRD

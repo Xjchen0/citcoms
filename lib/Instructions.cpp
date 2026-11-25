@@ -514,6 +514,10 @@ void read_initial_settings(struct All_variables *E)
   if(E->refstate.choice == 0) {
       input_string("refstate_file",E->refstate.filename,"refstate.dat",m);
   }
+  input_boolean("eba_dis_scaling",&(E->control.eba_dis_scaling),"off",m);
+
+  /* EarthByte: dynamic topography buoyancy cutoff above global z-node */
+  input_int("remove_buoyancy_above_znode",&(E->control.remove_buoyancy_above_znode),"10000",m);
 
   input_int("mineral_physics_model",&(E->control.mineral_physics_model),"1",m);
 
@@ -691,6 +695,12 @@ void read_initial_settings(struct All_variables *E)
 
       /* Output & Checkpoint Intervals */
       input_float("storage_interval_myr", &(E->control.storage_interval_myr), "0.0", m);
+      input_int("storage_spacing_Myr", &(E->control.record_every_Myr), "0", m);
+      if (E->control.record_every_Myr > 0 && E->control.storage_interval_myr <= 0.0f) {
+          /* EarthByte compatibility alias: map storage_spacing_Myr to storage_interval_myr
+           * so it benefits from citcoms_cpp exact_time_output snapping automatically. */
+          E->control.storage_interval_myr = (float)E->control.record_every_Myr;
+      }
       input_float("storage_interval_time", &(E->control.storage_interval_time), "0.0", m);
       input_boolean("exact_time_output", &(E->control.exact_time_output), "on", m);
 
@@ -698,6 +708,7 @@ void read_initial_settings(struct All_variables *E)
       input_float("end_age_myr", &(E->control.end_age_myr), "0.0", m);
       input_float("end_time_myr", &(E->control.end_age_myr), "0.0", m);
       input_double("end_time", &(E->control.end_time), "0.0", m);
+      input_boolean("exit_at_present", &(E->control.exit_at_present), "off", m);
 
       input_float("checkpoint_interval_myr", &(E->control.checkpoint_interval_myr), "0.0", m);
       input_float("checkpoint_interval_time", &(E->control.checkpoint_interval_time), "0.0", m);
@@ -1104,6 +1115,11 @@ void allocate_common_vars(struct All_variables *E)
   for(i=1;i<=E->mesh.nsd;i++)
       E->sphere.cap[j].TB[i] = (float *)  malloc((nno+1)*sizeof(float));
 
+  /* EarthByte: slab thermal & internal velocity assimilation arrays (zero-initialized) */
+  E->sphere.cap[j].slab_temp  = (float *) calloc(nno+1, sizeof(float));
+  E->sphere.cap[j].slab_sten  = (float *) calloc(nno+1, sizeof(float));
+  E->sphere.cap[j].slab_sten2 = (int *)   calloc(nno+1, sizeof(int));
+
   E->slice.tpg[j]      = (float *)malloc((nsf+2)*sizeof(float));
   E->slice.tpgb[j]     = (float *)malloc((nsf+2)*sizeof(float));
   E->slice.divg[j]     = (float *)malloc((nsf+2)*sizeof(float));
@@ -1119,6 +1135,10 @@ void allocate_common_vars(struct All_variables *E)
   E->heating_adi[j]    = (double *) malloc((nel+1)*sizeof(double));
   E->heating_visc[j]   = (double *) malloc((nel+1)*sizeof(double));
   E->heating_latent[j] = (double *) malloc((nel+1)*sizeof(double));
+  E->heating_adi_nd[j]    = (float *) calloc(nno+1, sizeof(float));
+  E->heating_visc_nd[j]   = (float *) calloc(nno+1, sizeof(float));
+  E->heating_latent_nd[j] = (float *) calloc(nno+1, sizeof(float));
+  E->div_norm2[j]         = (double *) calloc(npno+1, sizeof(double));
 
   /* lump mass matrix for the energy eqn */
   E->TMass[j] = (double *) malloc((nno+1)*sizeof(double));
@@ -1724,15 +1744,24 @@ static void output_parse_optional(struct  All_variables *E, const char *opt_str)
     E->output.seismic = 0;
     E->output.coord_bin = 0;
     E->output.tracer = 0;
+    E->output.tracer_dens = 0;
     E->output.comp_el = 0;
     E->output.comp_nd = 0;
     E->output.strain_nd = 0; 
     E->output.strain_el = 0; 
     E->output.heating = 0;
+    E->output.heating_visc_nd = 0;
+    E->output.heating_adi_nd = 0;
+    E->output.heating_latent_nd = 0;
     E->output.viscy = 0; 
     E->output.velo = 0;
     E->output.visc = 0;
     E->output.coord = 0;
+    E->output.sten_temp = 0;
+    E->output.sten_velo = 0;
+    E->output.divv = 0;
+    E->output.comp_sph = 0;
+    E->output.temp_sph = 0;
 
     while(1) {
         /* get next field */
@@ -1807,6 +1836,8 @@ static void output_parse_optional(struct  All_variables *E, const char *opt_str)
         }
         else if(strcmp(prev, "tracer")==0)
             E->output.tracer = 1;
+        else if(strcmp(prev, "tracer_dens")==0)
+            E->output.tracer_dens = 1;
         else if(strcmp(prev, "comp_el")==0)
             E->output.comp_el = 1;
         else if(strcmp(prev, "comp_nd")==0)
@@ -1817,6 +1848,34 @@ static void output_parse_optional(struct  All_variables *E, const char *opt_str)
             E->output.strain_el = 1;
         else if(strcmp(prev, "heating")==0)
             E->output.heating = 1;
+        else if(strcmp(prev, "heating_visc_nd")==0)
+            E->output.heating_visc_nd = 1;
+        else if(strcmp(prev, "heating_adi_nd")==0)
+            E->output.heating_adi_nd = 1;
+        else if(strcmp(prev, "heating_latent_nd")==0)
+            E->output.heating_latent_nd = 1;
+        else if(strcmp(prev, "sten_temp")==0)
+            E->output.sten_temp = 1;
+        else if(strcmp(prev, "sten_velo")==0)
+            E->output.sten_velo = 1;
+        else if(strcmp(prev, "divv")==0)
+            E->output.divv = 1;
+        else if(strcmp(prev, "temp_sph")==0) {
+            if (E->parallel.nprocxy != 12) {
+                if (E->parallel.me == 0)
+                    fprintf(stderr, "Warning: temp_sph only works in full spherical version. Disabled\n");
+            } else {
+                E->output.temp_sph = 1;
+            }
+        }
+        else if(strcmp(prev, "comp_sph")==0) {
+            if (E->parallel.nprocxy != 12) {
+                if (E->parallel.me == 0)
+                    fprintf(stderr, "Warning: comp_sph only works in full spherical version. Disabled\n");
+            } else {
+                E->output.comp_sph = 1;
+            }
+        }
         else if(strcmp(prev, "viscy")==0)
             E->output.viscy = 1; 
         else
@@ -2342,6 +2401,8 @@ void print_all_config_parameters(struct All_variables *E)
     fprintf(fp, "# CitcomS.solver.param\n");
     fprintf(fp, "reference_state=%d\n", E->refstate.choice);
     fprintf(fp, "refstate_file=%s\n", E->refstate.filename);
+    fprintf(fp, "eba_dis_scaling=%d\n", E->control.eba_dis_scaling);
+    fprintf(fp, "remove_buoyancy_above_znode=%d\n", E->control.remove_buoyancy_above_znode);
     fprintf(fp, "mineral_physics_model=%d\n", E->control.mineral_physics_model);
     fprintf(fp, "file_vbcs=%d\n", E->control.vbcs_file);
     fprintf(fp, "vel_bound_file=%s\n", E->control.velocity_boundary_file);
@@ -2351,8 +2412,18 @@ void print_all_config_parameters(struct All_variables *E)
     fprintf(fp, "lith_age_file=%s\n", E->control.lith_age_file);
     fprintf(fp, "lith_age_time=%d\n", E->control.lith_age_time);
     fprintf(fp, "lith_age_depth=%g\n", E->control.lith_age_depth);
+    fprintf(fp, "lith_age_depth_function=%d\n", E->control.lith_age_depth_function);
+    fprintf(fp, "lith_age_exponent=%g\n", E->control.lith_age_exponent);
+    fprintf(fp, "lith_age_min=%g\n", E->control.lith_age_min);
+    fprintf(fp, "lith_age_stencil_value=%g\n", E->control.lith_age_stencil_value);
+    fprintf(fp, "slab_assim=%d\n", E->control.slab_assim);
+    fprintf(fp, "slab_assim_file=%s\n", E->control.slab_assim_file);
+    fprintf(fp, "internal_vbcs_file=%d\n", E->control.internal_vbcs_file);
+    fprintf(fp, "velocity_internal_file=%s\n", E->control.velocity_internal_file);
     fprintf(fp, "start_age=%g\n", E->control.start_age);
     fprintf(fp, "reset_startage=%d\n", E->control.reset_startage);
+    fprintf(fp, "storage_spacing_Myr=%d\n", E->control.record_every_Myr);
+    fprintf(fp, "exit_at_present=%d\n", E->control.exit_at_present);
     fprintf(fp, "file_tbcs=%d\n", E->control.tbcs_file);
     fprintf(fp, "temp_bound_file=%s\n", E->control.temperature_boundary_file);
     fprintf(fp, "\n\n");
@@ -2408,6 +2479,7 @@ void print_all_config_parameters(struct All_variables *E)
     fprintf(fp, "regular_grid_delphi=%g\n", E->trace.delphi[0]);
     fprintf(fp, "chemical_buoyancy=%d\n", E->composition.ichemical_buoyancy);
     fprintf(fp, "buoy_type=%d\n", E->composition.ibuoy_type);
+    fprintf(fp, "hybrid_method=%d\n", E->composition.hybrid_method);
     fprintf(fp, "buoyancy_ratio=");
     if(E->composition.ncomp > 0)
     {

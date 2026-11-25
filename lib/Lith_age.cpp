@@ -43,6 +43,15 @@
 /* modern c++: float find_age_in_MY() prototype in header */
 void lith_age_update_tbc(struct All_variables *E);
 
+static inline int use_earthbyte_lith_assim(const struct All_variables *E)
+{
+  return (E->control.lith_age_depth_function != 0) ||
+         (E->control.lith_age_exponent >= 0.0f) ||
+         (E->control.lith_age_min > 0.0f) ||
+         (E->control.lith_age_stencil_value > -998.0f) ||
+         (E->control.slab_assim != 0);
+}
+
 
 void lith_age_input(struct All_variables *E)
 {
@@ -51,19 +60,42 @@ void lith_age_input(struct All_variables *E)
   E->control.lith_age = 0;
   E->control.lith_age_time = 0;
   E->control.temperature_bound_adj = 0;
+  E->control.lith_age_depth_function = 0;
+  E->control.lith_age_exponent = -1.0f; /* -1 = unset (legacy 0.5*z/z_lith); >=0 = EarthByte pow(z/z_lith, exp) */
+  E->control.lith_age_min = 0.0f;
+  E->control.lith_age_min_nondim = 0.0f;
+  E->control.lith_age_stencil_value = -999.0f;
+  E->control.lith_age_stencil_value_nondim = -999.0f;
+  E->control.slab_assim = 0;
+  E->control.slab_assim_file[0] = '\0';
+  E->control.internal_vbcs_file = 0;
+  E->control.velocity_internal_file[0] = '\0';
 
   input_int("lith_age",&(E->control.lith_age),"0",m);
+  input_boolean("slab_assim",&(E->control.slab_assim),"off",m);
+  input_boolean("internal_vbcs_file",&(E->control.internal_vbcs_file),"off",m);
 
-  
   input_int("lith_age_time",&(E->control.lith_age_time),"0",m);
   input_string("lith_age_file",E->control.lith_age_file,"",m);
   input_float("lith_age_depth",&(E->control.lith_age_depth),"0.0471",m); /* 300 km */
-  
+  input_boolean("lith_age_depth_function",&(E->control.lith_age_depth_function),"off",m);
+  input_float("lith_age_exponent",&(E->control.lith_age_exponent),"-1.0",m);
+  input_float("lith_age_min",&(E->control.lith_age_min),"0.0",m);
+  input_float("lith_age_stencil_value",&(E->control.lith_age_stencil_value),"-999.0",m);
+
   input_int("temperature_bound_adj",&(E->control.temperature_bound_adj),"0",m);
   if (E->control.temperature_bound_adj) {
     input_float("depth_bound_adj",&(E->control.depth_bound_adj),"0.1570",m);
     input_float("width_bound_adj",&(E->control.width_bound_adj),"0.08727",m);
   }
+
+  if (E->control.slab_assim) {
+    input_string("slab_assim_file",E->control.slab_assim_file,"",m);
+  }
+  if (E->control.internal_vbcs_file) {
+    input_string("velocity_internal_file",E->control.velocity_internal_file,"",m);
+  }
+
   return;
 }
 
@@ -83,9 +115,13 @@ void lith_age_init(struct All_variables *E)
   gnox=E->mesh.nox;
   gnoy=E->mesh.noy;
 
+  E->control.lith_age_min_nondim = E->control.lith_age_min / E->data.scalet;
+  E->control.lith_age_stencil_value_nondim = E->control.lith_age_stencil_value / E->data.scalet;
+
   if (E->parallel.me == 0 ) fprintf(stderr,"INSIDE lith_age_init\n");
   /* for ggrd, this is only defined for top processor */
   E->age_t=(float*) malloc((gnox*gnoy+1)*sizeof(float));
+  E->lith_age_depth_t=(float*) malloc((gnox*gnoy+1)*sizeof(float));
 
   if(E->control.lith_age_time==1)   {
     /* to open files every timestep */
@@ -97,7 +133,7 @@ void lith_age_init(struct All_variables *E)
   else {
     /* otherwise, just open for the first timestep */
     /* NOTE: This is only used if we are adjusting the boundaries */
-    sprintf(output_file,"%s",E->control.lith_age_file);
+    snprintf(output_file, sizeof(output_file), "%s", E->control.lith_age_file);
     fp1=fopen(output_file,"r");
     if (fp1 == NULL) {
       fprintf(E->fp,"(Boundary_conditions #1) Can't open %s\n",output_file);
@@ -108,9 +144,11 @@ void lith_age_init(struct All_variables *E)
 	node=j+(i-1)*gnox;
 	if(fscanf(fp1,"%f",&(E->age_t[node])) != 1) {
           fprintf(stderr,"Error while reading file '%s'\n",output_file);
-          exit(8);
+          fclose(fp1);
+          parallel_process_termination();
         }
-	E->age_t[node]=E->age_t[node]*E->data.scalet;
+	/* Fixed EarthByte bugfix: convert Myr to dimensionless time by dividing by scalet */
+	E->age_t[node] = E->age_t[node] / E->data.scalet;
       }
     fclose(fp1);
   } /* end E->control.lith_age_time == false */
@@ -384,9 +422,12 @@ void lith_age_temperature_bound_adj(struct All_variables *E, int lv)
 	}
   } /* end E->control.temperature_bound_adj */
 
-  if(E->control.lith_age_time) {
-    /* general init */
-    if(lv==E->mesh.gridmax)
+  if(E->control.lith_age_time && !use_earthbyte_lith_assim(E)) {
+    /* Legacy CIG mode: set interior TBX/TBY/TBZ flags.
+     * In EarthByte assimilation mode, flags are intentionally NOT set in the interior
+     * so deforming regions (age <= lith_age_stencil_value) can evolve freely without
+     * clobbering Dirichlet BC masks. */
+    if(lv==E->mesh.gridmax) {
       min_rad = 1;
       for(m=1;m <= E->sphere.caps_per_proc;m++){
 	for(i=1;i <= noy;i++)
@@ -410,14 +451,45 @@ void lith_age_temperature_bound_adj(struct All_variables *E, int lv)
 	    }
 	  }
       }
-      /*  MPI_Allreduce(&min_rad,&global_min_rad,1,MPI_FLOAT,MPI_MIN,E->parallel.world); */
-      /*       if(E->parallel.me == 0) */
-      /* 	fprintf(stderr,"lith_age_temperature_bound_adj: assigned TBCs down to %.1f km\n", */
-      /* 		(1-global_min_rad)*6371);c */
-      
+    }
   } /* end E->control.lith_age_time */
  
   return;
+}
+
+/* EarthByte: compute spatially varying assimilation depth E->lith_age_depth_t */
+static void get_lith_age_depth(struct All_variables *E)
+{
+  int m, i, j, nox, noy, nodeg, gnox;
+  float age_t;
+
+  if (!E->lith_age_depth_t)
+    return;
+
+  gnox = E->mesh.nox;
+  nox = E->lmesh.nox;
+  noy = E->lmesh.noy;
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    for (i = 1; i <= noy; i++)
+      for (j = 1; j <= nox; j++) {
+        nodeg = E->lmesh.nxs - 1 + j + (E->lmesh.nys + i - 2) * gnox;
+        age_t = E->age_t[nodeg];
+
+        if (age_t >= E->control.lith_age_stencil_value_nondim) {
+          age_t = max(age_t, E->control.lith_age_min_nondim);
+          if (E->control.lith_age_depth_function) {
+            /* Half-space cooling depth prefactor (Turcotte & Schubert):
+             * here lith_age_depth acts as a dimensionless prefactor (typically 1.0) */
+            E->lith_age_depth_t[nodeg] = (age_t > 0.0f ? 2.32f * sqrtf(age_t) : 0.0f) * E->control.lith_age_depth;
+          } else {
+            E->lith_age_depth_t[nodeg] = E->control.lith_age_depth;
+          }
+        } else {
+          /* Deforming / masked region: skip lithosphere assimilation */
+          E->lith_age_depth_t[nodeg] = -1.0f;
+        }
+      }
 }
 
 
@@ -512,10 +584,13 @@ void lith_age_conform_tbc(struct All_variables *E)
 	  } /* end k   */
   }   /*  end of solution cycles  && temperature_bound_adj */
   
-  /* NOW SET THE TEMPERATURES IN THE LITHOSPHERE IF CHANGING EVERY TIME STEP */
+  /* EarthByte: update age-dependent assimilation depth table */
+  get_lith_age_depth(E);
 
+  /* NOW SET THE TEMPERATURES IN THE LITHOSPHERE IF CHANGING EVERY TIME STEP */
   if((E->convection.tic_method == 4) || 
      ((E->monitor.solution_cycles>0) && E->control.lith_age_time)) {
+    const int eb_mode = use_earthbyte_lith_assim(E);
     for(m=1;m<=E->sphere.caps_per_proc;m++)
       for(i=1;i<=noy;i++)
 	for(j=1;j<=nox;j++){
@@ -528,11 +603,17 @@ void lith_age_conform_tbc(struct All_variables *E)
 	    r1=E->sx[m][3][node];
 
 	    if(fabs(r1-E->sphere.ro)>=e_4 && fabs(r1-E->sphere.ri)>=e_4)  { /* if NOT right on the boundary */
-	      if(in_lith_age_depth(r1,age,&depth_used,E)) {
-		/* if closer than (lith_age_depth) from top */
-
-		/* set a new age from the file */
-
+	      if (eb_mode) {
+	        float depth = E->sphere.ro - r1;
+	        float lith_d = E->lith_age_depth_t ? E->lith_age_depth_t[nodeg] : E->control.lith_age_depth;
+	        if (depth <= lith_d && age >= E->control.lith_age_stencil_value_nondim) {
+	          t0 = erft_age(r1, max(age, E->control.lith_age_min_nondim), E);
+	          E->sphere.cap[m].TB[1][node] = t0;
+	          E->sphere.cap[m].TB[2][node] = t0;
+	          E->sphere.cap[m].TB[3][node] = t0;
+	        }
+	      } else if(in_lith_age_depth(r1,age,&depth_used,E)) {
+		/* Legacy CIG mode: closer than (lith_age_depth) from top */
 		t0 = erft_age(r1,age,E);
 		E->sphere.cap[m].TB[1][node]=t0;
 		E->sphere.cap[m].TB[2][node]=t0;
@@ -549,33 +630,66 @@ void lith_age_conform_tbc(struct All_variables *E)
 /* given non dim radius and non-dim age, compute erf temperature */
 float erft_age(float nd_radius, float nd_age, struct All_variables *E)
 {
-  float lc,temp;
-  lc = (E->sphere.ro - nd_radius) * 0.5 / sqrt(nd_age);
-  temp = E->control.mantle_temp * erf(lc);
-  return temp;
+  float age_eff = max(nd_age, E->control.lith_age_min_nondim);
+  if (age_eff <= 0.0f) {
+    return (E->sphere.ro - nd_radius <= 1.0e-6f) ? 0.0f : E->control.mantle_temp;
+  }
+  float lc = (E->sphere.ro - nd_radius) * 0.5f / sqrtf(age_eff);
+  return E->control.mantle_temp * erff(lc);
 }
 
 void assimilate_lith_conform_bcs(struct All_variables *E)
 {
-  float lith_age_depth,daf, assimilate_new_temp,r1;
-  int m,j,node,nox,noz,noy,nodeg,i,k,noxnoz;
+  float lith_age_depth, daf, assimilate_new_temp, r1;
+  int m, j, node, nox, noz, noy, nodeg, i, k, noxnoz;
   unsigned int type;
 
 #ifdef USE_GGRD
-  myerror(E,"for now, we don't like assimiliate_lith_conform_bcs with ggrd age");
-  if(E->control.ggrd.age_control)
+  if(E->control.ggrd.age_control) {
+    myerror(E,"for now, we don't like assimilate_lith_conform_bcs with ggrd age");
     if(E->parallel.me_loc[3] != E->parallel.nprocz-1)
-      return ;			/* bail */
+      return;
+  }
 #endif
   
-  nox=E->lmesh.nox;noy=E->lmesh.noy;noz=E->lmesh.noz;
+  nox=E->lmesh.nox; noy=E->lmesh.noy; noz=E->lmesh.noz;
   noxnoz = nox*noz;
 
-  for(m=1;m<=E->sphere.caps_per_proc;m++){
+  if (use_earthbyte_lith_assim(E)) {
+    /* EarthByte 4D lithosphere thermal assimilation mode:
+     * Blend dynamic T with half-space cooling TB using daf = (depth/lith_age_depth)^exponent,
+     * skipping deforming regions where age_t < lith_age_stencil_value_nondim. */
+    const float exp_val = max(E->control.lith_age_exponent, 0.0f);
+    if (E->control.lith_age_time && exp_val > 0.0f) {
+      for (m = 1; m <= E->sphere.caps_per_proc; m++)
+        for (i = 1; i <= noy; i++)
+          for (j = 1; j <= nox; j++) {
+            nodeg = E->lmesh.nxs - 1 + j + (E->lmesh.nys + i - 2) * E->mesh.nox;
+            lith_age_depth = E->lith_age_depth_t ? E->lith_age_depth_t[nodeg] : E->control.lith_age_depth;
+            if (lith_age_depth <= 0.0f || E->age_t[nodeg] < E->control.lith_age_stencil_value_nondim)
+              continue;
+            for (k = 1; k <= noz; k++) {
+              node = k + (j - 1) * noz + (i - 1) * noxnoz;
+              float depth = E->sphere.ro - E->sx[m][3][node];
+              if (depth <= lith_age_depth) {
+                float znd = (depth <= 0.0f) ? 0.0f : (depth / lith_age_depth);
+                daf = powf(znd, exp_val);
+                assimilate_new_temp = E->sphere.cap[m].TB[3][node];
+                E->T[m][node] = daf * E->T[m][node] + (1.0f - daf) * assimilate_new_temp;
+              }
+            }
+          }
+    }
+    /* Always enforce top/bottom (and side) thermal Dirichlet BCs cleanly */
+    temperatures_conform_bcs2(E);
+    return;
+  }
 
+  /* Legacy CIG mode (100% backward compatible when EarthByte params are unset) */
+  for(m=1;m<=E->sphere.caps_per_proc;m++){
     for(i=1;i<=noy;i++)
       for(j=1;j<=nox;j++){
-	nodeg = E->lmesh.nxs-1+j+(E->lmesh.nys+i-2)*E->mesh.noz;
+	nodeg = E->lmesh.nxs-1+j+(E->lmesh.nys+i-2)*E->mesh.nox;
 	for(k=1;k<=noz;k++)  {
 	  node=k+(j-1)*noz+(i-1)*noxnoz;
 	  
@@ -594,16 +708,16 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
             assimilate_new_temp = E->sphere.cap[m].TB[2][node];
             break;
 	  case (TBX | TBZ):     /* clashes ! */
-            assimilate_new_temp = 0.5 * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[3][node]);
+            assimilate_new_temp = 0.5f * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[3][node]);
             break;
 	  case (TBX | TBY):     /* clashes ! */
-            assimilate_new_temp = 0.5 * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[2][node]);
+            assimilate_new_temp = 0.5f * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[2][node]);
             break;
 	  case (TBZ | TBY):     /* clashes ! */
-            assimilate_new_temp = 0.5 * (E->sphere.cap[m].TB[3][node] + E->sphere.cap[m].TB[2][node]);
+            assimilate_new_temp = 0.5f * (E->sphere.cap[m].TB[3][node] + E->sphere.cap[m].TB[2][node]);
             break;
 	  case (TBZ | TBY | TBX):     /* clashes ! */
-            assimilate_new_temp = 0.3333333 * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[2][node] + 
+            assimilate_new_temp = 0.3333333f * (E->sphere.cap[m].TB[1][node] + E->sphere.cap[m].TB[2][node] + 
 					       E->sphere.cap[m].TB[3][node]);
             break;
 	  } /* end switch */
@@ -612,12 +726,11 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
 	  case 0:  /* no match, next node */
             break;
 	  default:
-
 	    r1 = E->sx[m][3][node];
 	    if(in_lith_age_depth(r1,E->age_t[nodeg],&lith_age_depth,E)) {
 	      /* daf == depth_assimilation_factor */
-	      daf = 0.5*(E->sphere.ro - r1)/lith_age_depth;
-	      E->T[m][node] = daf*E->T[m][node] + (1.0-daf)*assimilate_new_temp;
+	      daf = 0.5f*(E->sphere.ro - r1)/lith_age_depth;
+	      E->T[m][node] = daf*E->T[m][node] + (1.0f-daf)*assimilate_new_temp;
 	    }else{
 	      E->T[m][node] = assimilate_new_temp;
 	    }
@@ -626,5 +739,25 @@ void assimilate_lith_conform_bcs(struct All_variables *E)
 	} /* k */
       }	  /* j */
   }	  /* cap */
+  return;
+}
+
+/* EarthByte: 4D thermal slab assimilation using stencil alpha in [0, 1] */
+void assimilate_slab_conform_bcs(struct All_variables *E)
+{
+  int j, node;
+  const int output = 1;
+
+  (E->solver.slab_temperature_read_files)(E, output);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    for (node = 1; node <= E->lmesh.nno; node++) {
+      const double alpha = (double)E->sphere.cap[j].slab_sten[node];
+      if (alpha > 0.0) {
+        E->T[j][node] = (1.0 - alpha) * E->T[j][node] + alpha * (double)E->sphere.cap[j].slab_temp[node];
+      }
+    }
+  }
+
   return;
 }

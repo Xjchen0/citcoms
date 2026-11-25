@@ -44,8 +44,9 @@ void regional_read_input_files_for_timesteps(struct All_variables *E, int action
 
     FILE *fp1, *fp2;
     float age, newage1, newage2;
-    char output_file1[255],output_file2[255];
-    float *TB1, *TB2, *VB1[4],*VB2[4], inputage1, inputage2;
+    char output_file1[1024],output_file2[1024];
+    float *TB1, *TB2, *VB1[5],*VB2[5], inputage1, inputage2;
+    float *ST1, *ST2, *SS1, *SS2;
     int nox,noz,noy,nnn,nox1,noz1,noy1;
     int i,ii,ll,mm,j,k,n,nodeg,nodel,node;
     int intage, pos_age;
@@ -81,14 +82,15 @@ void regional_read_input_files_for_timesteps(struct All_variables *E, int action
 
     age=find_age_in_MY(E);
 
-    if (age < 0.0f || ((action == 1 || action == 5) && age <= 1.0e-5f)) { /* age <= 0 -> use age=0 */
+    const int exact_age_action = (action == 1 || action == 2 || action == 5 || action == 6 || action == 7);
+    if (age < 0.0f || (exact_age_action && age <= 1.0e-5f)) { /* age <= 0 -> use age=0 */
       intage = 0;
       newage2 = newage1 = 0.0f;
       pos_age = 0;
     }
     else {
       float rounded_age = floorf(age + 0.5f);
-      if ((action == 1 || action == 5) && fabsf(age - rounded_age) < 1.0e-5f) {
+      if (exact_age_action && fabsf(age - rounded_age) < 1.0e-5f) {
         /* Exact integer age: read single file, avoiding crash from non-existent (max_age + 1) file. */
         intage = (int)rounded_age;
         newage2 = newage1 = rounded_age;
@@ -245,8 +247,64 @@ void regional_read_input_files_for_timesteps(struct All_variables *E, int action
         }
       break;
 
-	
-	
+      case 6:  /* EarthByte: read temperature and stencil for slab assimilation */
+        snprintf(output_file1, sizeof(output_file1), "%s%0.0f", E->control.slab_assim_file, newage1);
+        snprintf(output_file2, sizeof(output_file2), "%s%0.0f", E->control.slab_assim_file, newage2);
+        fp1 = fopen(output_file1, "r");
+        if (fp1 == NULL) {
+          fprintf(stderr, "(Problem_related #12) Cannot open %s\n", output_file1);
+          if (E->fp) fprintf(E->fp, "(Problem_related #12) Cannot open %s\n", output_file1);
+          parallel_process_termination();
+        }
+        if (pos_age) {
+          fp2 = fopen(output_file2, "r");
+          if (fp2 == NULL) {
+            fprintf(stderr, "(Problem_related #13) Cannot open %s\n", output_file2);
+            if (E->fp) fprintf(E->fp, "(Problem_related #13) Cannot open %s\n", output_file2);
+            fclose(fp1);
+            parallel_process_termination();
+          }
+        }
+        if ((E->parallel.me == 0) && (output == 1)) {
+          fprintf(E->fp, "Slab Assimilation: Starting Age = %g, Elapsed time = %g, Current Age = %g\n",
+                  E->control.start_age, E->monitor.elapsed_time, age);
+          fprintf(E->fp, "Slab Assimilation: File1 = %s\n", output_file1);
+          if (pos_age)
+            fprintf(E->fp, "Slab Assimilation: File2 = %s\n", output_file2);
+          else
+            fprintf(E->fp, "Slab Assimilation: File2 = No file inputted (exact/non-positive age)\n");
+        }
+        break;
+
+      case 7:  /* EarthByte: read internal velocity and stencil */
+        snprintf(output_file1, sizeof(output_file1), "%s%0.0f", E->control.velocity_internal_file, newage1);
+        snprintf(output_file2, sizeof(output_file2), "%s%0.0f", E->control.velocity_internal_file, newage2);
+        fp1 = fopen(output_file1, "r");
+        if (fp1 == NULL) {
+          fprintf(stderr, "(Problem_related #14) Cannot open %s\n", output_file1);
+          if (E->fp) fprintf(E->fp, "(Problem_related #14) Cannot open %s\n", output_file1);
+          parallel_process_termination();
+        }
+        if (pos_age) {
+          fp2 = fopen(output_file2, "r");
+          if (fp2 == NULL) {
+            fprintf(stderr, "(Problem_related #15) Cannot open %s\n", output_file2);
+            if (E->fp) fprintf(E->fp, "(Problem_related #15) Cannot open %s\n", output_file2);
+            fclose(fp1);
+            parallel_process_termination();
+          }
+        }
+        if ((E->parallel.me == 0) && (output == 1)) {
+          fprintf(E->fp, "Internal Velocity: Starting Age = %g, Elapsed time = %g, Current Age = %g\n",
+                  E->control.start_age, E->monitor.elapsed_time, age);
+          fprintf(E->fp, "Internal Velocity: File1 = %s\n", output_file1);
+          if (pos_age)
+            fprintf(E->fp, "Internal Velocity: File2 = %s\n", output_file2);
+          else
+            fprintf(E->fp, "Internal Velocity: File2 = No file inputted (exact/non-positive age)\n");
+        }
+        break;
+
     } /* end switch */
 
 
@@ -333,17 +391,27 @@ void regional_read_input_files_for_timesteps(struct All_variables *E, int action
             node=j+(i-1)*nox;
             if(fscanf(fp1,"%f",&inputage1) != 1) {
               fprintf(stderr,"Error while reading file '%s'\n",output_file1);
-              exit(8);
+              fclose(fp1);
+              if (pos_age) fclose(fp2);
+              parallel_process_termination();
             }
             if (pos_age) { /* positive ages - we must interpolate */
               if(fscanf(fp2,"%f",&inputage2) != 1) {
                 fprintf(stderr,"Error while reading file '%s'\n",output_file2);
-                exit(8);
+                fclose(fp1);
+                fclose(fp2);
+                parallel_process_termination();
+              }
+              /* EarthByte: preserve stencil masking if either endpoint is masked */
+              if (inputage1 <= E->control.lith_age_stencil_value ||
+                  inputage2 <= E->control.lith_age_stencil_value) {
+                inputage1 = min(inputage1, inputage2);
+                inputage2 = inputage1;
               }
               E->age_t[node] = (inputage1 + (inputage2-inputage1)/(newage2-newage1)*(age-newage1))/E->data.scalet;
             }
-            else { /* negative ages - don't do the interpolation */
-              E->age_t[node] = inputage1;
+            else { /* exact or non-positive age - convert Myr to dimensionless time */
+              E->age_t[node] = inputage1 / E->data.scalet;
             }
           }
         fclose(fp1);
@@ -464,6 +532,113 @@ void regional_read_input_files_for_timesteps(struct All_variables *E, int action
 
       break;
 
+      case 6:  /* EarthByte: read temperature and stencil for slab assimilation */
+        nnn = nox * noy * noz;
+        ST1 = (float*) malloc((nnn + 1) * sizeof(float));
+        ST2 = (float*) malloc((nnn + 1) * sizeof(float));
+        SS1 = (float*) malloc((nnn + 1) * sizeof(float));
+        SS2 = (float*) malloc((nnn + 1) * sizeof(float));
+
+        for (i = 1; i <= nnn; i++) {
+          if (fscanf(fp1, "%g %g", &(ST1[i]), &(SS1[i])) != 2) {
+            fprintf(stderr, "Error while reading file '%s'\n", output_file1);
+            fclose(fp1);
+            if (pos_age) fclose(fp2);
+            parallel_process_termination();
+          }
+          if (pos_age) {
+            if (fscanf(fp2, "%g %g", &(ST2[i]), &(SS2[i])) != 2) {
+              fprintf(stderr, "Error while reading file '%s'\n", output_file2);
+              fclose(fp1);
+              fclose(fp2);
+              parallel_process_termination();
+            }
+          }
+        }
+        fclose(fp1);
+        if (pos_age) fclose(fp2);
+
+        for (j = 1; j <= noy1; j++)
+          for (i = 1; i <= nox1; i++)
+            for (k = 1; k <= noz1; k++) {
+              nodel = k + (i - 1) * noz1 + (j - 1) * nox1 * noz1;
+              nodeg = (E->lmesh.nzs + k - 1) + (E->lmesh.nxs + i - 2) * noz + (E->lmesh.nys + j - 2) * noz * nox;
+
+              if (pos_age) {
+                E->sphere.cap[1].slab_temp[nodel] = ST1[nodeg] + (ST2[nodeg] - ST1[nodeg]) / (newage2 - newage1) * (age - newage1);
+                E->sphere.cap[1].slab_sten[nodel] = SS1[nodeg] + (SS2[nodeg] - SS1[nodeg]) / (newage2 - newage1) * (age - newage1);
+              } else {
+                E->sphere.cap[1].slab_temp[nodel] = ST1[nodeg];
+                E->sphere.cap[1].slab_sten[nodel] = SS1[nodeg];
+              }
+            }
+
+        free((void *) ST1);
+        free((void *) ST2);
+        free((void *) SS1);
+        free((void *) SS2);
+        break;
+
+      case 7:  /* EarthByte: read internal velocity and stencil */
+        nnn = nox * noy * noz;
+        for (i = 1; i <= dims + 1; i++) {
+          VB1[i] = (float*) malloc((nnn + 1) * sizeof(float));
+          VB2[i] = (float*) malloc((nnn + 1) * sizeof(float));
+        }
+
+        for (i = 1; i <= nnn; i++) {
+          if (fscanf(fp1, "%f %f %f %f", &(VB1[1][i]), &(VB1[2][i]), &(VB1[3][i]), &(VB1[4][i])) != 4) {
+            fprintf(stderr, "Error while reading file '%s'\n", output_file1);
+            fclose(fp1);
+            if (pos_age) fclose(fp2);
+            parallel_process_termination();
+          }
+          VB1[1][i] *= E->data.timedir;
+          VB1[2][i] *= E->data.timedir;
+          VB1[3][i] *= E->data.timedir;
+          if (pos_age) {
+            if (fscanf(fp2, "%f %f %f %f", &(VB2[1][i]), &(VB2[2][i]), &(VB2[3][i]), &(VB2[4][i])) != 4) {
+              fprintf(stderr, "Error while reading file '%s'\n", output_file2);
+              fclose(fp1);
+              fclose(fp2);
+              parallel_process_termination();
+            }
+            VB2[1][i] *= E->data.timedir;
+            VB2[2][i] *= E->data.timedir;
+            VB2[3][i] *= E->data.timedir;
+          }
+        }
+        fclose(fp1);
+        if (pos_age) fclose(fp2);
+
+        for (j = 1; j <= noy1; j++)
+          for (i = 1; i <= nox1; i++)
+            for (k = 1; k <= noz1; k++) {
+              nodel = k + (i - 1) * noz1 + (j - 1) * nox1 * noz1;
+              nodeg = (E->lmesh.nzs + k - 1) + (E->lmesh.nxs + i - 2) * noz + (E->lmesh.nys + j - 2) * noz * nox;
+
+              if ((int)VB1[4][nodeg] != 2) {
+                if (pos_age && (fabs(age - newage1) > fabs(age - newage2))) {
+                  E->sphere.cap[1].VB[1][nodel] = VB2[1][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].VB[2][nodel] = VB2[2][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].VB[3][nodel] = VB2[3][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].slab_sten2[nodel] = (int)VB2[4][nodeg];
+                } else {
+                  E->sphere.cap[1].VB[1][nodel] = VB1[1][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].VB[2][nodel] = VB1[2][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].VB[3][nodel] = VB1[3][nodeg] * E->data.scalev;
+                  E->sphere.cap[1].slab_sten2[nodel] = (int)VB1[4][nodeg];
+                }
+              } else {
+                E->sphere.cap[1].slab_sten2[nodel] = (int)VB1[4][nodeg];
+              }
+            }
+
+        for (i = 1; i <= dims + 1; i++) {
+          free((void *) VB1[i]);
+          free((void *) VB2[i]);
+        }
+        break;
 
     } /* end switch */
 

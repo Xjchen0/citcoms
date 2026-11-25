@@ -38,6 +38,72 @@ int layers(struct All_variables *,int,int);
 #include "ggrd_handling.h"
 #endif
 
+/* EarthByte: dynamically prescribe interior velocity BCs (VBX/VBY/VBZ) from slab_sten2 */
+void internal_velocity_bc(struct All_variables *E)
+{
+  int i, j, k, m, level, nodel, node;
+  int nox1, noy1, noz1;
+  int nox, noy, noz, levdepth;
+
+  /* read internal velocity & stencil from file (flag==2 nodes are skipped) */
+  read_internal_velocity_from_file(E);
+
+  if (E->control.verbose && E->fp_out) {
+    fprintf(E->fp_out, "INSIDE internal_velocity_bc\n");
+    fflush(E->fp_out);
+  }
+
+  if (E->parallel.me == 0 && E->fp) {
+    fprintf(E->fp, "Internal Velocity: Setting VBX, VBY, VBZ flags\n");
+    fflush(E->fp);
+  }
+
+  nox = E->lmesh.nox;
+  noy = E->lmesh.noy;
+  noz = E->lmesh.noz;
+
+  /* Update VBX/VBY/VBZ/SBX/SBY/SBZ flags at all multigrid levels */
+  for (level = E->mesh.levmax; level >= E->mesh.levmin; level--) {
+    if ((E->control.CONJ_GRAD && level == E->mesh.levmax) || E->control.NMULTIGRID) {
+      levdepth = E->mesh.levmax - level;
+      const int stride = 1 << levdepth;
+
+      nox1 = E->lmesh.NOX[level];
+      noy1 = E->lmesh.NOY[level];
+      noz1 = E->lmesh.NOZ[level];
+
+      for (m = 1; m <= E->sphere.caps_per_proc; m++) {
+        for (j = 1; j <= noy1; j++) {
+          for (i = 1; i <= nox1; i++) {
+            for (k = 1; k <= noz1; k++) {
+              nodel = k + (i - 1) * noz1 + (j - 1) * noz1 * nox1;
+              node = 1 + (k - 1) * stride
+                       + (i - 1) * noz * stride
+                       + (j - 1) * noz * nox * stride;
+
+              const int flag = E->sphere.cap[m].slab_sten2[node];
+              if (flag == 0) {
+                /* turn OFF all velocity and stress BCs */
+                E->NODE[level][m][nodel] &= ~(VBX | VBY | VBZ | SBX | SBY | SBZ);
+              } else if (flag == 1) {
+                /* turn ON interior velocity BCs */
+                E->NODE[level][m][nodel] |= (VBX | VBY | VBZ);
+                E->NODE[level][m][nodel] &= ~(SBX | SBY | SBZ);
+              }
+              /* flag == 2 (or other): leave existing boundary flags untouched */
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /* Rebuild zero_resid lists for all multigrid levels */
+  construct_id(E);
+
+  return;
+}
+
 
 
 

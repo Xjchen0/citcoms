@@ -278,6 +278,9 @@ struct CAP    {
     float *VB[4];
     float *V[4];
     float *Vprev[4];
+    float *slab_temp;    /* EarthByte: slab temperature assimilation field */
+    float *slab_sten;    /* EarthByte: slab thermal assimilation stencil [0,1] */
+    int   *slab_sten2;   /* EarthByte: internal velocity assimilation stencil (0=off,1=on,2=skip) */
     };
 
 struct SPHERE   {
@@ -478,6 +481,7 @@ struct CONTROL {
 
     /* Dissipation # */
     float disptn_number;
+    int eba_dis_scaling;             /* EarthByte EBA: depth-dependent Di scaling from refstate_file col 5 (default off) */
 
     /* inverse of Gruneisen parameter */
     float inv_gruneisen;
@@ -526,6 +530,15 @@ struct CONTROL {
     int lith_age_time;
     int lith_age_old_cycles;
     float lith_age_depth;
+    int lith_age_depth_function;     /* EarthByte: 1 = 2.32*sqrt(age)*lith_age_depth, 0 = constant depth */
+    float lith_age_exponent;         /* EarthByte: blending exponent (daf = (depth/z_lith)^exponent) */
+    float lith_age_min;              /* EarthByte: minimum lithosphere age in Myr */
+    float lith_age_min_nondim;       /* EarthByte: minimum lithosphere age (dimensionless) */
+    float lith_age_stencil_value;    /* EarthByte: ages <= stencil_value skip lith assimilation (Myr) */
+    float lith_age_stencil_value_nondim; /* EarthByte: stencil value (dimensionless) */
+    int slab_assim;                  /* EarthByte: enable 4D slab thermal assimilation */
+    int internal_vbcs_file;          /* EarthByte: enable 4D internal velocity boundary assimilation */
+    int remove_buoyancy_above_znode; /* EarthByte: zero buoyancy for global z-node > threshold (default 10000) */
 
   int precise_strain_rate; /* use proper computation for strain-rates in whole domain, not just poles */
 
@@ -580,12 +593,16 @@ struct CONTROL {
     char temperature_boundary_file[1000];
     char mat_file[1000];
     char lith_age_file[1000];
+    char slab_assim_file[1000];
+    char velocity_internal_file[1000];
 
     int total_iteration_cycles;
     int total_v_solver_calls;
 
     int checkpoint_frequency;
     int record_every;
+    int record_every_Myr;            /* EarthByte compatibility alias: storage_spacing_Myr */
+    int exit_at_present;             /* EarthByte: terminate cleanly when geological age reaches 0 Ma */
     int record_all_until;
 
     /* Output & Checkpoint Intervals */
@@ -625,6 +642,7 @@ struct REF_STATE {
     double *heat_capacity;
     /*double *thermal_conductivity;*/
     double *gravity;
+    double *dis;                     /* EarthByte EBA: depth-dependent dissipation number scaling */
     /*double *Tadi;*/
 };
 
@@ -716,15 +734,24 @@ struct Output {
     int seismic;      /* whether to output seismic velocity model */
     int coord_bin;    /* whether to output coordinates in binary format */
     int tracer;       /* whether to output tracer coordinate */
+    int tracer_dens;  /* EarthByte: output nodal tracer density */
     int comp_el;      /* whether to output composition at elements */
     int comp_nd;      /* whether to output composition at nodes */
     int strain_nd;
     int strain_el;
     int heating;      /* whether to output heating terms at elements */
+    int heating_visc_nd;   /* EarthByte: nodal viscous heating */
+    int heating_adi_nd;    /* EarthByte: nodal adiabatic heating */
+    int heating_latent_nd; /* EarthByte: nodal latent heating */
     int viscy; 	      /* whether to output yielding information */
     int velo;         /* whether to output 3D velocity and temperature in ascii */
     int visc;         /* whether to output 3D viscosity in ascii */
     int coord;        /* whether to output coordinates in ascii */
+    int sten_temp;    /* EarthByte: output thermal assimilation stencil */
+    int sten_velo;    /* EarthByte: output internal velocity assimilation stencil */
+    int divv;         /* EarthByte: output element-wise normalized velocity divergence */
+    int comp_sph;     /* EarthByte: output spherical harmonic expansion of composition */
+    int temp_sph;     /* EarthByte: output spherical harmonic expansion of temperature */
 
 
   /* flags used by GZDIR */
@@ -740,6 +767,7 @@ struct COMPOSITION {
 
     int ichemical_buoyancy;
     int icompositional_rheology;
+    int hybrid_method;               /* EarthByte: hybrid tracer-ratio/absolute composition method */
 
     /* if any of the above flags is true, turn this flag on */
     int on;
@@ -844,6 +872,10 @@ struct All_variables {
     double *heating_adi[NCS];
     double *heating_visc[NCS];
     double *heating_latent[NCS];
+    float  *heating_visc_nd[NCS];
+    float  *heating_adi_nd[NCS];
+    float  *heating_latent_nd[NCS];
+    double *div_norm2[NCS];
 
     double *P[NCS],*F[NCS],*U[NCS];
     double *T[NCS],*Tdot[NCS],*buoyancy[NCS];
@@ -888,6 +920,7 @@ struct All_variables {
     unsigned int *node[NCS];
 
     float *age_t;
+    float *lith_age_depth_t;         /* EarthByte: spatially varying assimilation depth */
 
     struct Shape_function_dx *GNX[MAX_LEVELS][NCS];
     struct Shape_function_dA *GDA[MAX_LEVELS][NCS];

@@ -77,6 +77,18 @@ void read_temperature_boundary_from_file(struct All_variables *E)
     return;
 }
 
+void read_slab_temperature_from_file(struct All_variables *E)
+{
+    (E->solver.read_input_files_for_timesteps)(E,6,1); /* read slab temp & stencil(6) */
+    return;
+}
+
+void read_internal_velocity_from_file(struct All_variables *E)
+{
+    (E->solver.read_input_files_for_timesteps)(E,7,1); /* read internal velocity & stencil(7) */
+    return;
+}
+
 
 /*=======================================================================
   Open restart file to get initial elapsed time, or calculate the right value
@@ -159,7 +171,7 @@ void set_starting_age(struct All_variables *E)
 {
 /* remember start_age is in MY */
     if (E->control.reset_startage)
-	E->control.start_age = E->monitor.elapsed_time*E->data.scalet;
+	E->control.start_age = find_age_in_MY(E);
 
    return;
 }

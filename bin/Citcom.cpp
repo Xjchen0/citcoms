@@ -145,6 +145,8 @@ int main(int argc, char **argv)
 #endif
       if (E->control.vbcs_file == 1)
           read_velocity_boundary_from_file(E);
+      if (E->control.internal_vbcs_file)
+          internal_velocity_bc(E);
       if (E->control.tbcs_file)
           read_temperature_boundary_from_file(E);
       if(E->control.tracer && (E->trace.ic_method_for_flavors == 99)){
@@ -239,6 +241,17 @@ int main(int argc, char **argv)
                 E->monitor.elapsed_time * (E->data.scalet > 0.0 ? E->data.scalet : 1.0), E->monitor.elapsed_time);
       }
     }
+    if (E->control.exit_at_present && E->data.timedir >= 0) {
+      float cur_age = find_age_in_MY(E);
+      if (cur_age <= (E->control.exact_time_output ? 1.0e-4f : 0.0f)) {
+        E->control.keep_going = 0;
+        reached_end_age = 1;
+        if (E->parallel.me == 0) {
+          fprintf(stderr, "\n>>> Reached present day (exit_at_present=on, age = %.4f Ma). Terminating.\n",
+                  cur_age);
+        }
+      }
+    }
 
     cpu_total_seconds = CPU_time0()-start_time;
     if (cpu_total_seconds > E->control.record_all_until)  {
@@ -271,6 +284,10 @@ int main(int argc, char **argv)
     /* updating plate velocity boundary condition */
     if(E->control.vbcs_file==1)
       read_velocity_boundary_from_file(E);
+
+    /* EarthByte: updating internal velocity boundary condition BEFORE Stokes solve */
+    if(E->control.internal_vbcs_file)
+      internal_velocity_bc(E);
 
     /* updating plate temperature boundary condition */
     if(E->control.tbcs_file) {

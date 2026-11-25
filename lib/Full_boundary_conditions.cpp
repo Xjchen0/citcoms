@@ -133,6 +133,12 @@ void full_velocity_boundary_conditions(struct All_variables *E)
          !E->control.restart && !E->control.post_p) {
         read_velocity_boundary_from_file(E);
       }
+
+      /* EarthByte: internal velocity boundary condition assimilation */
+      if(E->control.internal_vbcs_file &&
+         !E->control.restart && !E->control.post_p) {
+        internal_velocity_bc(E);
+      }
       
       return;
 }

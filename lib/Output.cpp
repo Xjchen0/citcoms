@@ -74,9 +74,13 @@ void output_common_input(struct All_variables *E)
 
     input_string("output_format", E->output.format, "ascii",m);
     input_string("output_optional", E->output.optional, "horiz_avg",m);
-    input_string("output_optional_ascii", E->output.optional_ascii, "horiz_avg",m);
-    input_string("output_optional_vtk", E->output.optional_vtk, "",m);
-    input_string("output_optional_h5", E->output.optional_h5, "surf,botm,horiz_avg",m);
+    /* In standalone 'ascii' or 'hdf5' mode, leave format-specific overrides empty unless
+     * explicitly provided so legacy/EarthByte 'output_optional' is always honored.
+     * In composite modes ('ascii,vtk' / 'ascii,hdf5'), keep deduplicated defaults. */
+    const int is_composite = (strchr(E->output.format, ',') != NULL);
+    input_string("output_optional_ascii", E->output.optional_ascii, is_composite ? "horiz_avg" : "", m);
+    input_string("output_optional_vtk", E->output.optional_vtk, "", m);
+    input_string("output_optional_h5", E->output.optional_h5, is_composite ? "surf,botm,horiz_avg" : "", m);
 
     /* gzdir type of I/O */
     E->output.gzdir.vtk_io = 0;
@@ -183,6 +187,9 @@ void output(struct All_variables *E, int cycles)
   if(E->output.tracer && E->control.tracer)
       output_tracer(E, cycles);
 
+  if(E->output.tracer_dens && E->control.tracer && E->composition.on)
+      output_tracer_dens(E, cycles);
+
   if (E->output.comp_nd && E->composition.on)
       output_comp_nd(E, cycles);
 
@@ -191,6 +198,30 @@ void output(struct All_variables *E, int cycles)
 
   if(E->output.heating && E->control.disptn_number != 0)
       output_heating(E, cycles);
+
+  if(E->output.heating_visc_nd && E->control.disptn_number != 0)
+      output_heating_visc_nd(E, cycles);
+
+  if(E->output.heating_adi_nd && E->control.disptn_number != 0)
+      output_heating_adi_nd(E, cycles);
+
+  if(E->output.heating_latent_nd && E->control.disptn_number != 0)
+      output_heating_latent_nd(E, cycles);
+
+  if(E->output.sten_temp && E->control.slab_assim)
+      output_sten_temp(E, cycles);
+
+  if(E->output.sten_velo && E->control.internal_vbcs_file)
+      output_sten_velo(E, cycles);
+
+  if(E->output.divv)
+      output_divv(E, cycles);
+
+  if(E->output.temp_sph)
+      output_temp_sph(E, cycles);
+
+  if(E->output.comp_sph && E->composition.on)
+      output_comp_sph(E, cycles);
 
   return;
 }
@@ -846,4 +877,281 @@ void output_time(struct All_variables *E, int cycles)
   E->monitor.cpu_time_at_last_cycle = current_time;
 
   return;
+}
+
+/* ================= EarthByte Diagnostic Outputs ================= */
+
+void output_divv(struct All_variables *E, int cycles)
+{
+  int i, j, m;
+  float *div_norm2_nd[NCS];
+  char output_file[255];
+  FILE *fp1;
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    div_norm2_nd[m] = (float *) calloc(E->lmesh.nno + 1, sizeof(float));
+
+  p_to_nodes(E, E->div_norm2, div_norm2_nd, E->mesh.levmax);
+
+  snprintf(output_file, sizeof(output_file), "%s.divv.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  const double denom = 1.0e-32 + E->monitor.vdotv;
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++) {
+      double val = (div_norm2_nd[j][i] > 0.0f) ? sqrt((double)div_norm2_nd[j][i] / denom) : 0.0;
+      fprintf(fp1, "%.6e\n", (float)val);
+    }
+  }
+
+  fclose(fp1);
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    free(div_norm2_nd[m]);
+}
+
+void output_sten_temp(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  snprintf(output_file, sizeof(output_file), "%s.sten_temp.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%.6e\n", E->sphere.cap[j].slab_sten[i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_sten_velo(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  snprintf(output_file, sizeof(output_file), "%s.sten_velo.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%d\n", E->sphere.cap[j].slab_sten2[i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_tracer_dens(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  if (!E->trace.dens_node[1])
+    return;
+
+  snprintf(output_file, sizeof(output_file), "%s.tracer_dens.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%.6e\n", E->trace.dens_node[j][i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_heating_adi_nd(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  p_to_nodes(E, E->heating_adi, E->heating_adi_nd, E->mesh.levmax);
+
+  snprintf(output_file, sizeof(output_file), "%s.heating_adi_nd.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%.4e\n", E->heating_adi_nd[j][i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_heating_latent_nd(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  p_to_nodes(E, E->heating_latent, E->heating_latent_nd, E->mesh.levmax);
+
+  snprintf(output_file, sizeof(output_file), "%s.heating_latent_nd.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%.4e\n", E->heating_latent_nd[j][i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_heating_visc_nd(struct All_variables *E, int cycles)
+{
+  int i, j;
+  char output_file[255];
+  FILE *fp1;
+
+  p_to_nodes(E, E->heating_visc, E->heating_visc_nd, E->mesh.levmax);
+
+  snprintf(output_file, sizeof(output_file), "%s.heating_visc_nd.%d.%d", E->control.data_file,
+           E->parallel.me, cycles);
+  fp1 = output_open(output_file, "w");
+
+  fprintf(fp1, "%d %d %.5e\n", cycles, E->lmesh.nno, E->monitor.elapsed_time);
+
+  for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+    fprintf(fp1, "%3d %7d\n", j, E->lmesh.nno);
+    for (i = 1; i <= E->lmesh.nno; i++)
+      fprintf(fp1, "%.4e\n", E->heating_visc_nd[j][i]);
+  }
+
+  fclose(fp1);
+}
+
+void output_temp_sph(struct All_variables *E, int cycles)
+{
+  int m, i, j, k, p, node;
+  int ll, mm;
+  float *TT[NCS], *sph_harm[2];
+  char output_file[255];
+  FILE *fp1 = NULL;
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    TT[m] = (float *) malloc((E->lmesh.nsf + 1) * sizeof(float));
+
+  sph_harm[0] = (float *) malloc(E->sphere.hindice * sizeof(float));
+  sph_harm[1] = (float *) malloc(E->sphere.hindice * sizeof(float));
+
+  if (E->parallel.me < E->parallel.nprocz) {
+    snprintf(output_file, sizeof(output_file), "%s.temp_sph.%d.%d", E->control.data_file,
+             E->parallel.me, cycles);
+    fp1 = output_open(output_file, "w");
+  }
+
+  for (k = 1; k <= E->lmesh.noz; k++) {
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)
+      for (i = 1; i <= E->lmesh.noy; i++)
+        for (j = 1; j <= E->lmesh.nox; j++) {
+          node = k + (j - 1) * E->lmesh.noz + (i - 1) * E->lmesh.nox * E->lmesh.noz;
+          p = j + (i - 1) * E->lmesh.nox;
+          TT[m][p] = (float)E->T[m][node];
+        }
+
+    sphere_expansion(E, TT, sph_harm[0], sph_harm[1]);
+
+    if (E->parallel.me < E->parallel.nprocz && fp1) {
+      for (ll = 0; ll <= E->output.llmax; ll++)
+        for (mm = 0; mm <= ll; mm++) {
+          p = E->sphere.hindex[ll][mm];
+          fprintf(fp1, "T expanded layer=%d ll=%d mm=%d -- %12g %12g\n",
+                  k + E->lmesh.nzs - 1, ll, mm,
+                  sph_harm[0][p], sph_harm[1][p]);
+        }
+    }
+  }
+
+  if (fp1)
+    fclose(fp1);
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    free(TT[m]);
+  free(sph_harm[0]);
+  free(sph_harm[1]);
+}
+
+void output_comp_sph(struct All_variables *E, int cycles)
+{
+  int m, i, j, k, p, t, node;
+  int ll, mm;
+  float *CC[NCS], *sph_harm[2];
+  char output_file[255];
+  FILE *fp1 = NULL;
+
+  if (!E->composition.on || E->composition.ncomp <= 0)
+    return;
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    CC[m] = (float *) malloc((E->lmesh.nsf + 1) * sizeof(float));
+
+  sph_harm[0] = (float *) malloc(E->sphere.hindice * sizeof(float));
+  sph_harm[1] = (float *) malloc(E->sphere.hindice * sizeof(float));
+
+  if (E->parallel.me < E->parallel.nprocz) {
+    snprintf(output_file, sizeof(output_file), "%s.comp_sph.%d.%d", E->control.data_file,
+             E->parallel.me, cycles);
+    fp1 = output_open(output_file, "w");
+  }
+
+  for (k = 1; k <= E->lmesh.noz; k++) {
+    for (m = 1; m <= E->sphere.caps_per_proc; m++)
+      for (i = 1; i <= E->lmesh.noy; i++)
+        for (j = 1; j <= E->lmesh.nox; j++) {
+          node = k + (j - 1) * E->lmesh.noz + (i - 1) * E->lmesh.nox * E->lmesh.noz;
+          p = j + (i - 1) * E->lmesh.nox;
+          /* Expand last composition field (matching EarthByte convention) */
+          t = E->composition.ncomp - 1;
+          CC[m][p] = (float)E->composition.comp_node[m][t][node];
+        }
+
+    sphere_expansion(E, CC, sph_harm[0], sph_harm[1]);
+
+    if (E->parallel.me < E->parallel.nprocz && fp1) {
+      for (ll = 0; ll <= E->output.llmax; ll++)
+        for (mm = 0; mm <= ll; mm++) {
+          p = E->sphere.hindex[ll][mm];
+          fprintf(fp1, "C expanded layer=%d ll=%d mm=%d -- %12g %12g\n",
+                  k + E->lmesh.nzs - 1, ll, mm,
+                  sph_harm[0][p], sph_harm[1][p]);
+        }
+    }
+  }
+
+  if (fp1)
+    fclose(fp1);
+
+  for (m = 1; m <= E->sphere.caps_per_proc; m++)
+    free(CC[m]);
+  free(sph_harm[0]);
+  free(sph_harm[1]);
 }

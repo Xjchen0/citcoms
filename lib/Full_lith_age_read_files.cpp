@@ -37,5 +37,11 @@ void full_lith_age_read_files(struct All_variables *E, int output)
     return;
 }
 
+void full_slab_temperature_read_files(struct All_variables *E, int output)
+{
+    full_read_input_files_for_timesteps(E,6,output); /*6 (=action) is for slab_assim*/
+    return;
+}
+
 
 /* End of file */

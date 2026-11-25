@@ -60,6 +60,7 @@ void composition_input(struct All_variables *E)
         /* ibuoy_type=1 (ratio method) */
 
         input_int("buoy_type",&(E->composition.ibuoy_type),"1,0,nomax",m);
+        input_boolean("hybrid_method",&(E->composition.hybrid_method),"off",m);
         /* if (E->composition.ibuoy_type!=1) {
             fprintf(stderr,"Terror-Sorry, only ratio method allowed now\n");
             fflush(stderr);
@@ -145,6 +146,8 @@ void write_composition_instructions(struct All_variables *E)
 	  fprintf(E->trace.fpt,"Ratio Method\n");
         if (E->composition.ibuoy_type==0)
 	  fprintf(E->trace.fpt,"Absolute Method\n");
+        if (E->composition.hybrid_method)
+	  fprintf(E->trace.fpt,"Hybrid Method (empty elements -> C=0)\n");
 
         for(k=0; k<E->composition.ncomp; k++) {
             fprintf(E->trace.fpt,"Buoyancy Ratio: %f\n", E->composition.buoyancy_ratio[k]);
@@ -244,6 +247,15 @@ static void allocate_composition_memory(struct All_variables *E)
             }
         }
 
+        /* EarthByte: allocate tracer density arrays */
+        E->trace.dens_el[j] = (double *)calloc(E->lmesh.nel + 1, sizeof(double));
+        E->trace.dens_node[j] = (double *)calloc(E->lmesh.nno + 1, sizeof(double));
+        if (!E->trace.dens_el[j] || !E->trace.dens_node[j]) {
+            fprintf(E->trace.fpt, "ERROR(allocate_composition_memory)-no memory for tracer density\n");
+            fflush(E->trace.fpt);
+            parallel_process_termination();
+        }
+
     }
 
     return;
@@ -268,8 +280,10 @@ void init_composition(struct All_variables *E)
         exit(10);
     } */
 
-    /* for empty elements */
-    check_initial_composition(E);
+    /* for empty elements (skip neighbor fill in EarthByte hybrid_method where empty == ambient C=0) */
+    if (!E->composition.hybrid_method) {
+        check_initial_composition(E);
+    }
 
     /* Map elemental composition to nodal points */
     map_composition_to_nodes(E);
@@ -315,12 +329,19 @@ static void compute_elemental_composition_ratio_method(struct All_variables *E)
             for (flavor=0; flavor<E->trace.nflavors; flavor++)
                 numtracers += E->trace.ntracer_flavor[j][flavor][e];
 
+            if (E->trace.dens_el[j])
+                E->trace.dens_el[j][e] = (double)numtracers;
+
             /* Check for empty entries and compute ratio.  */
-            /* If no tracers are in an element, skip this element, */
-            /* use previous composition. */
+            /* If no tracers are in an element, skip this element (use previous composition),
+             * unless EarthByte hybrid_method is enabled (empty -> ambient C = 0.0). */
             if (numtracers == 0) {
                 iempty++;
-                /* fprintf(E->trace.fpt, "No tracer in element %d!\n", e); */
+                if (E->composition.hybrid_method) {
+                    for (i = 0; i < E->composition.ncomp; i++) {
+                        E->composition.comp_el[j][i][e] = 0.0;
+                    }
+                }
                 continue;
             }
 
@@ -332,7 +353,7 @@ static void compute_elemental_composition_ratio_method(struct All_variables *E)
         }
 
 
-        if (iempty) {
+        if ((iempty) && (!E->composition.hybrid_method)) {
 
             if ((1.0*iempty/E->lmesh.nel)>0.80) {
                 fprintf(E->trace.fpt,"WARNING(compute_elemental...)-number of tracers is REALLY LOW\n");
@@ -344,6 +365,8 @@ static void compute_elemental_composition_ratio_method(struct All_variables *E)
     } /* end j */
 
     E->trace.istat_iempty += iempty;
+
+    map_tracer_dens_to_nodes(E);
 
     return;
 }
@@ -382,6 +405,9 @@ static void compute_elemental_composition_absolute_method(struct All_variables *
             for (flavor=0; flavor<E->trace.nflavors; flavor++)
                 numtracers += E->trace.ntracer_flavor[j][flavor][e];
 
+            if (E->trace.dens_el[j])
+                E->trace.dens_el[j][e] = (double)numtracers;
+
             /* Check for empty entries */
             /* If no tracers are in an element, comp = 0.0 (i.e. is ambient) */
             if (numtracers == 0) {
@@ -406,6 +432,8 @@ static void compute_elemental_composition_absolute_method(struct All_variables *
             }
         }
     }
+
+    map_tracer_dens_to_nodes(E);
 
     return;
 }
@@ -480,6 +508,43 @@ void map_composition_to_nodes(struct All_variables *E)
         */
 
     } /* end j */
+
+    return;
+}
+
+/********** MAP TRACER DENSITY TO NODES ****************/
+void map_tracer_dens_to_nodes(struct All_variables *E)
+{
+    double *tmp[NCS];
+    int n, kk, nelem, nodenum, j;
+
+    if (!E->trace.dens_el[1] || !E->trace.dens_node[1])
+        return;
+
+    const double avg_el_vol = E->mesh.volume / (double)E->mesh.nel;
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+        for (kk = 1; kk <= E->lmesh.nno; kk++)
+            E->trace.dens_node[j][kk] = 0.0;
+
+        for (nelem = 1; nelem <= E->lmesh.nel; nelem++) {
+            const double norm_dens = (E->trace.dens_el[j][nelem] / E->eco[j][nelem].area) * avg_el_vol;
+            for (nodenum = 1; nodenum <= 8; nodenum++) {
+                n = E->ien[j][nelem].node[nodenum];
+                E->trace.dens_node[j][n] += norm_dens * E->TWW[E->mesh.levmax][j][nelem].node[nodenum];
+            }
+        }
+    }
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++)
+        tmp[j] = E->trace.dens_node[j];
+
+    (E->exchange_node_d)(E, tmp, E->mesh.levmax);
+
+    for (j = 1; j <= E->sphere.caps_per_proc; j++) {
+        for (kk = 1; kk <= E->lmesh.nno; kk++)
+            E->trace.dens_node[j][kk] *= E->MASS[E->mesh.levmax][j][kk];
+    }
 
     return;
 }

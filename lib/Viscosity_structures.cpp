@@ -1027,11 +1027,445 @@ void visc_from_T(struct All_variables *E, float **EEta, int propogate)
             }
         break;	
 
+    /* EarthByte viscosity laws (cases 20-28, 112-118) for data assimilation & EBA */
+    case 20:
+        /* eta = N_0 exp(E/(T+T_0) - E/(0.5+T_0))
+           where T is normalized to be within 0...1
+           Rheology used in Flament et al. (2013, 2014).
+           Modification of case 3 for a background temperature of 0.5. */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 21:
+        /* eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 10 to 50 in the lower mantle (l==3)
+           Flament et al. (2014), case TC8 */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 10.0 + 112.72814*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 22:
+        /* eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 10 to 100 in the lower mantle (l==3)
+           Steinberger & Calderwood (2006), Zhang et al. (2010), Flament et al. (2014) TC7 */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 10.0 + 253.638315*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 23:
+        /* eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 10 to 30 in the lower mantle (l==3)
+           Flament et al. (2014), case TC9 */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 10.0 + 56.36407*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 24:
+        /* Rheology used by Zhang et al. (2010), Bower et al. (2013)
+           eta = N_0(r) exp( E * (T_0 - T) )
+           Linear lower mantle prefactor starting at 2 at top of lower mantle */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control==0)
+                    tempa = E->viscosity.N0[l];
+                else
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        temp += TT[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 2.0 + 13.91966133*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l] * (E->viscosity.T[l] - temp) );
+                }
+            }
+        break;
+
+    case 25:
+        /* EBA rheology (Flament): eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 5 to 100 in the lower mantle (l==3) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 5.0 + 275.493297*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 26:
+        /* EBA rheology (Flament): eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 5 to 80 in the lower mantle (l==3) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 5.0 + 217.494708*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 27:
+        /* EBA rheology (Flament / Rudolph et al., 2015):
+           eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 10 to 100 between 1000 km and 2867 km depth (l==3) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 10.0 + 307.125307*(zzz - 0.15696);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 28:
+        /* EBA rheology (Flament): eta = N_0(r) exp(E/(T+T_0) - E/(0.5+T_0)), T in [0,1]
+           N_0(r) increases linearly from 2 to 100 in the lower mantle (l==3) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 2.0 + 220.305922*(zzz - 0.105164024);
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
     case 100:
         /* user-defined viscosity law goes here */
         fprintf(stderr, "Need user definition for viscosity law: 'rheol=%d'\n",
                 E->viscosity.RHEOL);
         parallel_process_termination();
+        break;
+
+    case 112:
+        /* EarthByte (Hassan): power-law depth profile in lower mantle (l==3) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                if(E->control.mat_control)
+                    tempa = E->viscosity.N0[l] * E->VIP[m][i];
+                else
+                    tempa = E->viscosity.N0[l];
+
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    if(l==3) {
+                        tempa = 0.5 * pow(10.0, (4.0*zzz/(E->sphere.ro - E->sphere.ri) - 0.5));
+                    }
+                    EEta[m][ (i-1)*vpts + jj ] = tempa *
+                        exp( E->viscosity.E[l]/(temp+E->viscosity.T[l])
+                             - E->viscosity.E[l]/(0.5 + E->viscosity.T[l]) );
+                }
+            }
+        break;
+
+    case 113:
+        /* EarthByte (Hassan): depth-dependent activation term in lower mantle with LTBL clipping */
+        {
+            const double Zmax = 10.5;
+            const double Zmin = 2.25;
+            const double Zavg = (Zmax - Zmin) / 2.0;
+            const double l3Const = 0.85;
+            const double l012Const = 2.5;
+
+            for(m=1;m<=E->sphere.caps_per_proc;m++)
+                for(i=1;i<=nel;i++) {
+                    l = E->mat[m][i] - 1;
+
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                        zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                    }
+
+                    for(jj=1;jj<=vpts;jj++) {
+                        temp=0.0;
+                        zzz=0.0;
+                        for(kk=1;kk<=ends;kk++) {
+                            TT[kk]=max(TT[kk],zero);
+                            temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                            zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                        }
+                        if(l==3) {
+                            double Zr = Zmin + (Zmax - Zmin) *
+                                (zzz - E->viscosity.zbase_layer[l-1]) /
+                                (E->viscosity.zbase_layer[l] - E->viscosity.zbase_layer[l-1]);
+                            double result = exp( (E->viscosity.E[l] + Zr) / (temp + E->viscosity.T[l])
+                                                 - (E->viscosity.E[l] + Zmax) / (l3Const + E->viscosity.T[l]) );
+                            if(zzz > 0.43) result = max(min(result, 100.0), 20.0);
+                            EEta[m][ (i-1)*vpts + jj ] = (float)result;
+                        } else {
+                            EEta[m][ (i-1)*vpts + jj ] = (float)
+                                exp( E->viscosity.E[l] / (temp + E->viscosity.T[l])
+                                     - (E->viscosity.E[l] + Zavg) / (l012Const + E->viscosity.T[l]) );
+                        }
+                    }
+                }
+        }
+        break;
+
+    case 117:
+        /* EarthByte (Hassan): Arrhenius (rheol 7 variant) with T clamped to [0,1] and UTBL clip (z < 0.06 -> eta <= 1) */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    double result = E->viscosity.N0[l] *
+                        exp( (E->viscosity.E[l] + E->viscosity.Z[l]*zzz) / (temp + E->viscosity.T[l])
+                             - (E->viscosity.E[l] + E->viscosity.Z[l]*(E->sphere.ro - E->sphere.ri)) / (1.0 + E->viscosity.T[l]) );
+                    if(zzz < 0.06) result = min(result, 1.0);
+                    EEta[m][ (i-1)*vpts + jj ] = (float)result;
+                }
+            }
+        break;
+
+    case 118:
+        /* EarthByte (Hassan): Arrhenius (rheol 7 variant) with T clamped to [0,1], no UTBL clip */
+        for(m=1;m<=E->sphere.caps_per_proc;m++)
+            for(i=1;i<=nel;i++) {
+                l = E->mat[m][i] - 1;
+                for(kk=1;kk<=ends;kk++) {
+                    TT[kk] = E->T[m][E->ien[m][i].node[kk]];
+                    zz[kk] = (1.0 - E->sx[m][3][E->ien[m][i].node[kk]]);
+                }
+                for(jj=1;jj<=vpts;jj++) {
+                    temp=0.0;
+                    zzz=0.0;
+                    for(kk=1;kk<=ends;kk++) {
+                        TT[kk]=max(TT[kk],zero);
+                        temp += min(TT[kk],one) * E->N.vpt[GNVINDEX(kk,jj)];
+                        zzz += zz[kk] * E->N.vpt[GNVINDEX(kk,jj)];
+                    }
+                    double result = E->viscosity.N0[l] *
+                        exp( (E->viscosity.E[l] + E->viscosity.Z[l]*zzz) / (temp + E->viscosity.T[l])
+                             - (E->viscosity.E[l] + E->viscosity.Z[l]*(E->sphere.ro - E->sphere.ri)) / (1.0 + E->viscosity.T[l]) );
+                    EEta[m][ (i-1)*vpts + jj ] = (float)result;
+                }
+            }
         break;
 
     default:

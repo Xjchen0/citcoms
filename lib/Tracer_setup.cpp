@@ -222,8 +222,9 @@ void tracer_input(struct All_variables *E)
         input_float("tracer_Tmweak",&(E->trace.Tmweak),"1.0",m);
 
 
-        /* Warning level */
+        /* Warning level & EarthByte tracer cushion */
         input_boolean("itracer_warnings",&(E->trace.itracer_warnings),"on",m);
+        input_int("tracer_cushion",&(E->trace.icushion),"100000",m);
 
 
         if(E->parallel.nprocxy == 12)
@@ -1091,14 +1092,14 @@ static void read_tracer_file(struct All_variables *E)
     }
 
 
-    /* initially size tracer arrays to number of tracers divided by processors */
-
-    icushion=100;
+    /* initially size tracer arrays to number of tracers divided by processors + cushion */
+    icushion = (E->trace.icushion > 0) ? E->trace.icushion : 100000;
 
     /* for absolute tracer method */
     E->trace.number_of_tracers = number_of_tracers;
 
-    iestimate=number_of_tracers/E->parallel.nproc + icushion;
+    iestimate = number_of_tracers / E->parallel.nproc
+              + number_of_tracers / (E->parallel.nproc * 5) + icushion;
 
     for (j=1;j<=E->sphere.caps_per_proc;j++) {
 
