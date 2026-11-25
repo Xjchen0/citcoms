@@ -1,6 +1,8 @@
-# `citcoms_cpp` 4D 板块与俯冲板片数据同化实战教程
+# 4D 板块与俯冲板片数据同化实战教程
 
-本教程面向地球动力学模拟研究者，系统介绍如何在 **`citcoms_cpp`** 中使用源自 **EarthByte / Bower et al. (2015)** 的 **4D 板块重构、岩石圈热同化、俯冲板片热/运动学同化、EBA 耗散数缩放、下地幔粘度结构以及混合示踪粒子**功能，并充分发挥 `citcoms_cpp` 独有的 **FGMRES + V-cycle + Block 3×3 现代求解器、精确地质年代步长对齐、无滞后边界同步与 ParaView 一键可视化（VTK/HDF5）**优势。
+← 返回 [README](../README.md) | 完整参数表：[EarthByte 科学特性与参数总表](earthbyte_features.md)
+
+本教程面向地球动力学模拟研究者，系统介绍如何在本引擎中使用吸收自 **EarthByte/CitcomS（Bower et al., 2015）** 的 **4D 板块重构、岩石圈热同化、俯冲板片热/运动学同化、EBA 耗散数缩放、下地幔粘度结构以及混合示踪粒子**功能，并充分发挥现代 C++17 版本独有的 **FGMRES + V-cycle + Block 3×3 求解器、精确地质年代步长对齐、无滞后边界同步与 ParaView 一键可视化（VTK/HDF5）**优势。
 
 ---
 
@@ -10,27 +12,38 @@
 
 在“板块运动历史驱动地幔对流”（Data-Assimilating Mantle Convection）模型中，地表板块重构（如 GPlates / Müller et al. 模型）通过以下四个由浅入深的同化机制耦合到地幔对流求解器：
 
-1. **地表板块速度边界条件（`file_vbcs = 1`）**：
-   在每一步根据当前地质年代 $t_{\text{age}}$（Ma），对相邻整百万年的地表速度场 $v_\theta, v_\phi$ 进行线性插值并作为顶面 Dirichlet 速度边界条件（`topvbc = 1`）。
-2. **时变岩石圈热结构同化（`lith_age = 1, lith_age_time = 1`）**：
-   读取海底/大陆岩石圈热年龄场 $A(\theta, \phi, t)$，基于半空间冷却模型计算理论温度 $T_{\text{lith}} = T_m \operatorname{erf}\!\left(\frac{z}{2\sqrt{A^*}}\right)$，并利用深度平滑混合权重将动力学温度与同化温度平滑过渡：
-   $$T_{\text{new}} = \mathrm{daf} \cdot T_{\text{dyn}} + (1 - \mathrm{daf}) \cdot T_{\text{lith}}, \qquad \mathrm{daf} = \left(\frac{z}{z_{\text{lith}}}\right)^p$$
-   其中 $p = \texttt{lith\_age\_exponent}$，$z_{\text{lith}}$ 可为固定深度（`lith_age_depth_function = off`）或随年龄变化的半空间热边界层厚度 $z_{\text{lith}} = 2.32\sqrt{A^*}\cdot\texttt{lith\_age\_depth}$（`lith_age_depth_function = on`）。对于形变板块边界或洋脊等不希望强制同化的区域，只需在年龄文件中写入 $\le \texttt{lith\_age\_stencil\_value}$（如 `-999`），求解器会自动跳过该区域使其自由动力学演化。
-3. **俯冲板片热结构同化（`slab_assim = 1`）**：
-   读取三维俯冲板片温度 $T_{\text{slab}}$ 与连续掩膜权重 $\alpha \in [0, 1]$，在每个温度时间步结束时执行平滑热同化：
-   $$T_{\text{new}} = (1 - \alpha)\, T_{\text{dyn}} + \alpha\, T_{\text{slab}}$$
-   当 $\alpha = 1$ 时强制锁定为俯冲板片理论温度；$0 < \alpha < 1$ 时平滑过渡；$\alpha = 0$ 时完全自由对流。
-4. **俯冲板片内部运动学速度同化（`internal_vbcs_file = 1`）**：
-   读取三维内部速度场 $(v_\theta, v_\phi, v_r)$ 与整型三态标志 `flag`（`0` = 自由求解，`1` = 强制施加内部速度 Dirichlet 边界，`2` = 保持原有边界标志不变），动态在所有多重网格层级（`levmin..levmax`）更新 `VBX/VBY/VBZ` 标志并重建残差约束与刚度矩阵。
+#### 1. 地表板块速度边界条件（`file_vbcs=1`）
+在每一步根据当前地质年代 $t_{\text{age}}$（Ma），对相邻整百万年的地表速度场 $v_\theta, v_\phi$ 进行线性插值并作为顶面 Dirichlet 速度边界条件（`topvbc=1`）。
 
-### 1.2 `citcoms_cpp` 相比原生 EarthByte 的关键增强（“以我为主”）
+#### 2. 时变岩石圈热结构同化（`lith_age=1`, `lith_age_time=1`）
+读取海底/大陆岩石圈热年龄场 $A(\theta, \phi, t)$（无量纲化后记为 $A_{\text{nd}} = A / \text{scalet}$ ），基于半空间冷却模型计算理论温度 $T_{\text{lith}} = T_m \operatorname{erf}\left(\frac{z}{2\sqrt{A_{\text{nd}}}}\right)$ ，并利用深度平滑混合权重将动力学温度与同化温度平滑过渡：
 
-| 维度 | 原生 EarthByte/CitcomS | `citcoms_cpp` 集成增强版 |
+$$
+T_{\text{new}} = \mathrm{daf} \cdot T_{\text{dyn}} + (1 - \mathrm{daf}) \cdot T_{\text{lith}}, \qquad \mathrm{daf} = \left(\frac{z}{z_{\text{lith}}}\right)^p
+$$
+
+其中指数 $p$ 由参数 `lith_age_exponent` 控制； $z_{\text{lith}}$ 可设为固定深度（`lith_age_depth_function=off`），或采用随年龄变化的半空间热边界层厚度 $z_{\text{lith}} = 2.32\sqrt{A_{\text{nd}}} \cdot d_0$ （`lith_age_depth_function=on`，其中前因子 $d_0$ 由 `lith_age_depth` 给出）。对于形变板块边界或洋脊等不希望强制同化的区域，只需在年龄文件中写入小于等于 `lith_age_stencil_value` 的数值（如 `-999`），求解器会自动跳过该区域使其自由动力学演化。
+
+#### 3. 俯冲板片热结构同化（`slab_assim=1`）
+读取三维俯冲板片温度 $T_{\text{slab}}$ 与连续掩膜权重 $\alpha \in [0, 1]$ ，在每个温度时间步结束时执行平滑热同化：
+
+$$
+T_{\text{new}} = (1 - \alpha)\, T_{\text{dyn}} + \alpha\, T_{\text{slab}}
+$$
+
+当 $\alpha = 1$ 时强制锁定为俯冲板片理论温度；当 $0 < \alpha < 1$ 时平滑过渡；当 $\alpha = 0$ 时完全自由对流。
+
+#### 4. 俯冲板片内部运动学速度同化（`internal_vbcs_file=1`）
+读取三维内部速度场 $(v_\theta, v_\phi, v_r)$ 与整型三态标志 `flag`（`0` = 自由求解，`1` = 强制施加内部速度 Dirichlet 边界，`2` = 保持原有边界标志不变），动态在所有多重网格层级（`levmin..levmax`）更新 `VBX/VBY/VBZ` 标志并重建残差约束与刚度矩阵。
+
+### 1.2 与原生 EarthByte/CitcomS 的架构改进与增强
+
+| 维度 | 原生 EarthByte/CitcomS | 本版本集成增强 |
 |---|---|---|
 | **内部速度同化时序** | 在时间步末尾更新 `internal_velocity_bc`，导致 Stokes 求解滞后 1 步，且重启首步易失步 | 在 `general_stokes_solver` **之前**（以及 `restart` 读入检查点后）同步更新 `internal_velocity_bc` 与刚度矩阵，**零步滞后** |
 | **整百万年文件读取** | 在起始整年代（如 `start_age = 200 Ma`）会尝试打开 `201` 文件导致崩溃；非插值分支遗漏 `/scalet` | 对 `action = 1, 2, 5, 6, 7` 统一采用精确整年代单文件保护，不再越界查找 `max_age + 1`；修正 `age_t` 非插值分支量纲换算 |
 | **时间输出与 0 Ma 终止** | 依赖 `storage_spacing_Myr` 过线触发，无法精确踩在整百万年 | `storage_spacing_Myr` 自动映射到 `citcoms_cpp` 的 `storage_interval_myr` + `exact_time_output = on`，**精确踩点整 Myr 与 `0.0 Ma`** |
-| **高粘度对比 Stokes 求解** | 传统 `uzawa = cg` + `fmg`，强横向粘度对比（$10^4$–$10^6$）及内部速度约束下易震荡满迭代 | 原生兼容 `uzawa = fgmres` + `mg_mode = vcycle` + `mg_smoother = block3x3_gs`，速度提升 **2.4×–2.7×** |
+| **高粘度对比 Stokes 求解** | 传统 `uzawa = cg` + `fmg`，强横向粘度对比（ $10^4\text{–}10^6$ ）及内部速度约束下易震荡满迭代 | 原生兼容 `uzawa = fgmres` + `mg_mode = vcycle` + `mg_smoother = block3x3_gs`，速度提升 **2.4×–2.7×** |
 | **EBA 参考态向后兼容** | 强制读取 `refstate_file` 第 5 列作 `Di(z)`，导致传统 7 列（第 5 列为 `0`）文件加热项归零 | 新增显式开关 `eba_dis_scaling`（默认 `off`），100% 兼容旧 4/7 列文件；开启后同时支持 5 列与 7 列 EBA 文件 |
 | **可视化与并行 I/O** | 仅传统分进程 ASCII / 旧版 VTK | 完整支持 `ascii,vtk`（`cap`/`single` 模式 + `.pvd` + `comp_nd`）与 `ascii,hdf5`（`.xdmf`）及全部 EarthByte 诊断输出 |
 
@@ -78,7 +91,7 @@ CitcomS 中所有 2D（地表）和 3D（全局单 cap）ASCII 输入文件必�
 - **维度**：2D（`nodex × nodey` 行）
 - **列格式**：`age_Ma`（1 列浮点数）
 - **单位**：**Ma**（程序内部自动除以 `scalet` 转为无量纲扩散时间）。
-- **掩膜约定**：形变带/俯冲带上方/洋中脊等不参与岩石圈热同化的节点，写入 $\le \texttt{lith\_age\_stencil\_value}$ 的值（如 `-999.0`）；当两端点插值任一端 $\le \texttt{lith\_age\_stencil\_value}$ 时，自动保持掩膜不插值。
+- **掩膜约定**：形变带/俯冲带上方/洋中脊等不参与岩石圈热同化的节点，写入 ≤ `lith_age_stencil_value` 的值（如 `-999.0`）；当两端点插值任一端 ≤ `lith_age_stencil_value` 时，自动保持掩膜不插值。
 
 #### 3. 俯冲板片热同化文件（`slab_assim_file`）
 - **维度**：3D（`nodex × nodey × nodez` 行）
@@ -94,7 +107,8 @@ CitcomS 中所有 2D（地表）和 3D（全局单 cap）ASCII 输入文件必�
     - `0`：关闭该节点的内部速度/应力边界标志，恢复自由 Stokes 求解。
     - `1`：开启该节点的 `VBX | VBY | VBZ` 内部速度约束，速度锁定为该行指定的 `(v_theta, v_phi, v_r)`。
     - `2`：**跳过该节点**，保持已有边界标志不变。
-- > **重要安全规范**：**顶面（`k = nodez`）、底面 CMB（`k = 1`）以及 Regional 模型的四个侧面（`i = 1, nodex` 和 `j = 1, nodey`）必须统一标记为 `flag = 2`！**否则会覆盖地表板块速度边界或 CMB 自由滑移边界导致求解发散。
+
+> **重要安全规范**：**顶面（`k = nodez`）、底面 CMB（`k = 1`）以及 Regional 模型的四个侧面（`i = 1, nodex` 和 `j = 1, nodey`）必须统一标记为 `flag = 2`！** 否则会覆盖地表板块速度边界或 CMB 自由滑移边界导致求解发散。
 
 #### 5. EBA 参考态文件（`refstate_file`，当 `reference_state = 0`）
 - **行数**：`nodez` 行（从 CMB `k = 1` 到地表 `k = nodez`）
@@ -172,14 +186,14 @@ def verify_assim_files(prefix_dir, ages, caps, nox, noy, noz):
 # citcoms_cpp 全球 4D 板块/俯冲同化 + EBA + FGMRES/V-cycle 模板
 # ============================================================
 
-# --- 1. 输出目录、格式与可视化 ---
-datadir = "./output_global_4d"
-datafile = "earth4d"
-output_format = "ascii,vtk"
-output_optional_ascii = "horiz_avg,divv,sten_temp,sten_velo"
-output_optional_vtk = "comp_nd,surf"
-vtk_format = "binary"
-vtk_output_mode = "cap"              # 12 cap 合并 .vts + .pvd，ParaView 一键播放
+# --- 1. 输出目录、格式与可视化（仅路径/前缀参数使用 ""）---
+datadir="./output_global_4d"
+datafile="earth4d"
+output_format=ascii,vtk
+output_optional_ascii=horiz_avg,divv,sten_temp,sten_velo
+output_optional_vtk=comp_nd,surf
+vtk_format=binary
+vtk_output_mode=cap                  # 12 cap 合并 .vts + .pvd，ParaView 一键播放
 
 # --- 2. 网格与 MPI 分解（12 caps × 2×2×2 = 96 ranks）---
 nproc_surf = 12
@@ -339,34 +353,34 @@ output_optional = surf,botm,geoid
 
 | `rheol` | 公式与下地幔（`l = 3`）前因子 $N_0(z)$ 特征 | 参考文献 |
 |---|---|---|
-| `20` | $\eta = N_0 \exp\!\big(\frac{E}{T+T_0} - \frac{E}{0.5+T_0}\big)$，$T\in[0,1]$，参考背景温度 $0.5$ | Flament et al. (2013, 2014) |
+| `20` | $\eta = N_0 \exp\big(\frac{E}{T+T_0} - \frac{E}{0.5+T_0}\big)$ ， $T\in[0,1]$ ，参考背景温度 $0.5$ | Flament et al. (2013, 2014) |
 | `21` | 同 `20`，下地幔 $N_0(z)$ 从 `10` 线性增至 `50`（670–2867 km） | Flament et al. (2014) TC8 |
 | `22` | 同 `20`，下地幔 $N_0(z)$ 从 `10` 线性增至 `100`（670–2867 km） | Flament et al. (2014) TC7 / Zhang et al. (2010) |
 | `23` | 同 `20`，下地幔 $N_0(z)$ 从 `10` 线性增至 `30`（670–2867 km） | Flament et al. (2014) TC9 |
-| `24` | Frank-Kamenetskii $\eta = N_0(z)\exp(E(T_0-T))$，下地幔自 `2` 线性递增 | Zhang et al. (2010) / Bower et al. (2013) |
+| `24` | Frank-Kamenetskii $\eta = N_0(z)\exp(E(T_0-T))$ ，下地幔自 `2` 线性递增 | Zhang et al. (2010) / Bower et al. (2013) |
 | `25` | 同 `20`，下地幔 $N_0(z)$ 从 `5` 线性增至 `100`（EBA 专用） | Flament EBA 系列 |
 | `26` | 同 `20`，下地幔 $N_0(z)$ 从 `5` 线性增至 `80`（EBA 专用） | Flament EBA 系列 |
 | `27` | 同 `20`，下地幔 $N_0(z)$ 在 **1000–2867 km** 间从 `10` 线性增至 `100` | Rudolph et al. (2015) / Flament EBA |
 | `28` | 同 `20`，下地幔 $N_0(z)$ 从 `2` 线性增至 `100` | Flament EBA 系列 |
 | `112` | 下地幔指数增长 $N_0(z) = 0.5 \times 10^{4z/(r_o-r_i)-0.5}$ | Hassan et al. |
-| `113` | 下地幔深度相关活化能项 + 底部热边界层粘度裁剪 `[20, 100]`（$z > 0.43$） | Hassan et al. |
-| `117` | Arrhenius（`rheol=7` 变体），$T\in[0,1]$ 且浅部 $z < 0.06$ 限制 $\eta \le 1$ | Hassan et al. |
+| `113` | 下地幔深度相关活化能项 + 底部热边界层粘度裁剪 `[20, 100]`（ $z > 0.43$ ） | Hassan et al. |
+| `117` | Arrhenius（`rheol=7` 变体）， $T\in[0,1]$ 且浅部 $z < 0.06$ 限制 $\eta \le 1$ | Hassan et al. |
 | `118` | 同 `117`，无浅部粘度裁剪 | Hassan et al. |
 
 ### 5.3 常见问题排查（FAQ）
 
 1. **Q：开启 `internal_vbcs_file = on` 后 Stokes 求解不收敛或散度偏大？**
    - **检查 1**：确认所有顶面（`k = nodez`）、底面（`k = 1`）及 Regional 侧面的 `flag` 均为 `2`，不能为 `0` 或 `1`！
-   - **检查 2**：确保内部指定速度场近似满足不可压缩连续性方程（$\nabla \cdot \mathbf{v} \approx 0$），避免在相邻节点上强行给定强烈辐合/辐散的速度。
+   - **检查 2**：确保内部指定速度场近似满足不可压缩连续性方程（ $\nabla \cdot \mathbf{v} \approx 0$ ），避免在相邻节点上强行给定强烈辐合/辐散的速度。
    - **检查 3**：在 `output_optional_ascii` 中开启 `divv,sten_velo` 检查散度高值区是否正好位于 `flag = 1` 边缘；同时开启 `uzawa = fgmres` + `mg_smoother = block3x3_gs` + `aug_lagr = on`。
 
 2. **Q：开启 `eba_dis_scaling = on` 后报错提示列数不足，或者加热项为 0？**
    - 检查 `refstate_file` 是否至少有 5 列，且第 5 列为正的耗散数深度缩放系数（如 `1.0` 左右，而非旧文件留空的 `0.0`）。若使用传统 7 列（第 5 列填 0）参考态文件，请保持 `eba_dis_scaling = off`。
 
-3. **Q：在 `output_format = ascii,vtk` 下找不到 `.sten_temp` 或 `.divv` 文件？**
+3. **Q：在 `output_format=ascii,vtk` 下找不到 `.sten_temp` 或 `.divv` 文件？**
    - 复合输出模式下，ASCII 诊断字段由 `output_optional_ascii` 单独控制，请在配置中显式加入：
-     `output_optional_ascii = "horiz_avg,sten_temp,sten_velo,divv"`。
-   - 在单独 `output_format = ascii` 模式下，直接写在 `output_optional` 中即可生效。
+     `output_optional_ascii=horiz_avg,sten_temp,sten_velo,divv`。
+   - 在单独 `output_format=ascii` 模式下，直接写在 `output_optional` 中即可生效。
 
 4. **Q：如何验证所有 EarthByte 功能在本地编译环境中工作正常？**
    - 运行内置自动化测试套件：
@@ -374,3 +388,14 @@ output_optional = surf,botm,geoid
      python3 tests/test_earthbyte_features.py
      ```
      该脚本会在临时目录中依次验证 EBA `Di` 缩放与旧 7 列兼容性、全部 13 种 EarthByte 粘度结构、完整 4D 岩石圈/板片/内部速度同化与重启、动态地形浮力截断、混合示踪粒子以及 12 核全球球谐诊断输出。
+
+---
+
+## 六、来源声明与学术引用
+
+本教程涉及的 4D 板块/俯冲板片数据同化、EBA 耗散数深度缩放、下地幔粘度结构（`rheol=20–28, 112–118`）、混合示踪粒子及诊断输出机制吸收改编自 **EarthByte/CitcomS**（`https://github.com/EarthByte/citcoms`，GPL-2.0 开源协议）。使用上述功能发表科研成果时，请在引用原始 CitcomS 文献（Moresi et al., 2014; Zhong et al., 2000, 2008; Tan et al., 2006）的同时，按需引用以下 EarthByte 核心文献：
+
+- Bower, D. J., Gurnis, M., & Flament, N. (2015). *Assimilating lithosphere and slab history in 4-D Earth models*. Physics of the Earth and Planetary Interiors, 238, 8–22. [https://doi.org/10.1016/j.pepi.2014.10.013](https://doi.org/10.1016/j.pepi.2014.10.013)
+- Flament, N., Gurnis, M., Williams, S., Seton, M., Skogseid, J., Heine, C., & Müller, R. D. (2014). *Topographic asymmetry of the South Atlantic from global models of mantle flow and lithospheric stretching*. Earth and Planetary Science Letters, 387, 107–119. [https://doi.org/10.1016/j.epsl.2013.11.017](https://doi.org/10.1016/j.epsl.2013.11.017)
+- Zhang, N., Zhong, S., Leng, W., & Li, Z.-X. (2010). *A model for the evolution of the Earth's mantle structure since the Early Paleozoic*. JGR: Solid Earth, 115, B06401. [https://doi.org/10.1029/2009JB006896](https://doi.org/10.1029/2009JB006896)
+- Rudolph, M. L., Lekić, V., & Lithgow-Bertelloni, C. (2015). *Viscosity jump in Earth's mid-mantle*. Science, 350(6266), 1349–1352. [https://doi.org/10.1126/science.aad1929](https://doi.org/10.1126/science.aad1929)
