@@ -390,6 +390,80 @@ def test_full_sphere_sph_outputs(root):
     print("    PASS: Full spherical temp_sph, comp_sph, divv, tracer_dens & rheol=22 verified on 12 ranks!")
 
 
+def test_parser_unquoted_and_spacing(root):
+    print("[6/6] Testing parser: unquoted non-path params, spaces around '=', inline comments, CRLF...")
+    dd = os.path.join(root, "parse_test")
+    os.makedirs(dd, exist_ok=True)
+    cfg = os.path.join(root, "parse_test.cfg")
+    # Mix quoted paths, unquoted non-path params, spaces around '=', spaces after commas, comments, CRLF
+    lines = [
+        f'datadir = "{dd}"',
+        'datafile="parsetest"',
+        "output_format = ascii, vtk   # composite without quotes",
+        "output_optional_ascii = horiz_avg, divv  # comma list with spaces",
+        "output_optional_vtk = surf",
+        "vtk_output_mode = cap",
+        "vtk_format = ascii",
+        "nproc_surf=1 nprocx=1 nprocy=1 nprocz=1",
+        "nodex = 9",
+        "nodey = 9",
+        "nodez = 9",
+        "mgunitx=2",
+        "mgunity=2",
+        "mgunitz=2",
+        "levels=3",
+        "theta_min=1.0",
+        "theta_max=1.5",
+        "fi_min=0.0",
+        "fi_max=0.5",
+        "radius_inner=0.55",
+        "radius_outer=1.0",
+        "minstep=1",
+        "maxstep=1",
+        "maxtotstep=10",
+        "storage_spacing=1",
+        "checkpointFrequency=100",
+        "cpu_limits_in_seconds=3600",
+        "rayleigh = 1e6",
+        "Solver = multigrid",
+        "uzawa = fgmres # inline comment",
+        "mg_mode = vcycle",
+        "mg_smoother = block3x3_gs",
+        "accuracy = 1e-4",
+        "piterations = 50",
+        "topvbc=0",
+        "botvbc=0",
+        "toptbc=1",
+        "toptbcval=0.0",
+        "bottbc=1",
+        "bottbcval=1.0",
+        "tic_method=0",
+        "num_perturbations=1",
+        "perturbl=2",
+        "perturbm=1",
+        "perturblayer=5",
+        "perturbmag=0.05",
+        "mantle_temp=0.5",
+        "Viscosity = system",
+        "VISC_UPDATE = true",
+        "num_mat = 4",
+        "TDEPV = yes",
+        "rheol = 20",
+        "visc0 = 1, 1, 1, 10",
+        "viscE = 2.0, 2.0, 2.0, 2.0",
+        "viscT = 0.5, 0.5, 0.5, 0.5",
+        "checkpoint_on_termination = false",
+    ]
+    with open(cfg, "wb") as f:
+        f.write(("\r\n".join(lines) + "\r\n").encode("utf-8"))
+    run_cmd(["mpirun", "-np", "1", REG_BIN, cfg])
+    assert os.path.exists(os.path.join(dd, "parsetest.horiz_avg.0.1"))
+    assert os.path.exists(os.path.join(dd, "parsetest.divv.0.1"))
+    assert os.path.exists(os.path.join(dd, "parsetest.pvd"))
+    assert not os.path.exists(os.path.join(dd, "parsetest.velo.0.1")), "Composite ascii,vtk should suppress 3D ASCII velo!"
+    print("    PASS: Parser handles unquoted non-path params, spaces around '=', comments, and CRLF cleanly!")
+
+
 def main():
     root = tempfile.mkdtemp(prefix="verify_earthbyte_")
     try:
@@ -398,7 +472,8 @@ def main():
         test_4d_assimilation_and_restart(root)
         test_buoyancy_cutoff_and_hybrid_tracers(root)
         test_full_sphere_sph_outputs(root)
-        print("\n=== ALL 5 EARTHBYTE INTEGRATION TEST SUITES PASSED! ===")
+        test_parser_unquoted_and_spacing(root)
+        print("\n=== ALL 6 EARTHBYTE & PARSER INTEGRATION TEST SUITES PASSED! ===")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

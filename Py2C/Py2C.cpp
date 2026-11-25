@@ -54,7 +54,17 @@ void Py2CConverter::initialize_parameters()
   // CitcomS.controller
   // storage_spacing is called monitoringFrequency in the Python versions
   parameters["storage_spacing"] = Parameter("100", "CitcomS.controller");
+  parameters["storage_spacing_Myr"] = Parameter("0", "CitcomS.controller");
+  parameters["storage_interval_myr"] = Parameter("0.0", "CitcomS.controller");
+  parameters["storage_interval_time"] = Parameter("0.0", "CitcomS.controller");
+  parameters["exact_time_output"] = Parameter("on", "CitcomS.controller");
+  parameters["end_age_myr"] = Parameter("0.0", "CitcomS.controller");
+  parameters["exit_at_present"] = Parameter("off", "CitcomS.controller");
   parameters["checkpointFrequency"] = Parameter("100", "CitcomS.controller");
+  parameters["checkpoint_interval_myr"] = Parameter("0.0", "CitcomS.controller");
+  parameters["checkpoint_walltime"] = Parameter("0.0", "CitcomS.controller");
+  parameters["checkpoints_to_keep"] = Parameter("3", "CitcomS.controller");
+  parameters["checkpoint_on_termination"] = Parameter("on", "CitcomS.controller");
   
   // CitcomS.solver
   parameters["datadir"] = Parameter("\".\"", "CitcomS.solver");
@@ -111,6 +121,15 @@ void Py2CConverter::initialize_parameters()
   parameters["precond"] = Parameter("1","CitcomS.solver.vsolver");
   parameters["accuracy"] = Parameter("1.0e-4","CitcomS.solver.vsolver");
   parameters["uzawa"] = Parameter("cg","CitcomS.solver.vsolver");
+  parameters["inner_rel_tol"] = Parameter("0.0","CitcomS.solver.vsolver");
+  parameters["fcg_mmax"] = Parameter("10","CitcomS.solver.vsolver");
+  parameters["fgmres_restart"] = Parameter("30","CitcomS.solver.vsolver");
+  parameters["residual_refresh_every"] = Parameter("0","CitcomS.solver.vsolver");
+  parameters["inner_mg_cycles"] = Parameter("0","CitcomS.solver.vsolver");
+  parameters["p_precond"] = Parameter("bpi","CitcomS.solver.vsolver");
+  parameters["mg_mode"] = Parameter("fmg","CitcomS.solver.vsolver");
+  parameters["mg_smoother"] = Parameter("scalar_gs","CitcomS.solver.vsolver");
+  parameters["coarse_solver"] = Parameter("gs","CitcomS.solver.vsolver");
   parameters["compress_iter_maxstep"] = Parameter("100","CitcomS.solver.vsolver");
   parameters["mg_cycle"] = Parameter("1","CitcomS.solver.vsolver");
   parameters["down_heavy"] = Parameter("3","CitcomS.solver.vsolver");
@@ -179,8 +198,12 @@ void Py2CConverter::initialize_parameters()
   parameters["blob_dT"] = Parameter("0.18", "CitcomS.solver.ic");
 
   // CitcomS.solver.output
-  parameters["output_format"] = Parameter("\"ascii\"", "CitcomS.solver.output");
-  parameters["output_optional"] = Parameter("\"surf,botm,tracer\"", "CitcomS.solver.output");
+  parameters["output_format"] = Parameter("ascii", "CitcomS.solver.output");
+  parameters["output_optional"] = Parameter("surf,botm,tracer", "CitcomS.solver.output");
+  parameters["output_optional_ascii"] = Parameter("horiz_avg", "CitcomS.solver.output");
+  parameters["output_optional_vtk"] = Parameter("", "CitcomS.solver.output");
+  parameters["output_optional_h5"] = Parameter("surf,botm,horiz_avg", "CitcomS.solver.output");
+  parameters["vtk_output_mode"] = Parameter("cap", "CitcomS.solver.output");
   parameters["output_ll_max"] = Parameter("20", "CitcomS.solver.output");
   parameters["self_gravitation"] = Parameter("0", "CitcomS.solver.output");
   parameters["use_cbf_topo"] = Parameter("0", "CitcomS.solver.output");
@@ -200,6 +223,8 @@ void Py2CConverter::initialize_parameters()
   // CitcomS.solver.param
   parameters["reference_state"] = Parameter("1", "CitcomS.solver.param");
   parameters["refstate_file"] = Parameter("\"refstate.dat\"", "CitcomS.solver.param");
+  parameters["eba_dis_scaling"] = Parameter("off", "CitcomS.solver.param");
+  parameters["remove_buoyancy_above_znode"] = Parameter("10000", "CitcomS.solver.param");
   parameters["mineral_physics_model"] = Parameter("3", "CitcomS.solver.param");
   parameters["file_vbcs"] = Parameter("0", "CitcomS.solver.param");
   parameters["vel_bound_file"] = Parameter("\"bevel.dat\"", "CitcomS.solver.param");
@@ -209,10 +234,18 @@ void Py2CConverter::initialize_parameters()
   parameters["lith_age_file"] = Parameter("\"age.dat\"", "CitcomS.solver.param");
   parameters["lith_age_time"] = Parameter("0", "CitcomS.solver.param");
   parameters["lith_age_depth"] = Parameter("0.0314", "CitcomS.solver.param");
+  parameters["lith_age_depth_function"] = Parameter("off", "CitcomS.solver.param");
+  parameters["lith_age_exponent"] = Parameter("-1.0", "CitcomS.solver.param");
+  parameters["lith_age_min"] = Parameter("0.0", "CitcomS.solver.param");
+  parameters["lith_age_stencil_value"] = Parameter("-999.0", "CitcomS.solver.param");
+  parameters["slab_assim"] = Parameter("off", "CitcomS.solver.param");
+  parameters["slab_assim_file"] = Parameter("\"\"", "CitcomS.solver.param");
+  parameters["internal_vbcs_file"] = Parameter("off", "CitcomS.solver.param");
+  parameters["velocity_internal_file"] = Parameter("\"\"", "CitcomS.solver.param");
   parameters["start_age"] = Parameter("40", "CitcomS.solver.param");
   parameters["reset_startage"] = Parameter("0", "CitcomS.solver.param");
   parameters["file_tbcs"] = Parameter("0", "CitcomS.solver.param");
-  parameters["temp_bound_file"] = Parameter("btemp.dat", "CitcomS.solver.param");
+  parameters["temp_bound_file"] = Parameter("\"btemp.dat\"", "CitcomS.solver.param");
 
   // CitcomS.solver.phase
   parameters["Ra_410"] = Parameter("0", "CitcomS.solver.phase");
@@ -241,12 +274,14 @@ void Py2CConverter::initialize_parameters()
   parameters["regular_grid_delphi"] = Parameter("1.0", "Citcoms.Solver.tracer");
   parameters["chemical_buoyancy"] = Parameter("1", "Citcoms.Solver.tracer");
   parameters["buoy_type"] = Parameter("1", "Citcoms.Solver.tracer");
+  parameters["hybrid_method"] = Parameter("off", "Citcoms.Solver.tracer");
+  parameters["tracer_cushion"] = Parameter("100000", "Citcoms.Solver.tracer");
   parameters["buoyancy_ratio"] = Parameter("1.0", "Citcoms.Solver.tracer");
   parameters["tracer_enriched"] = Parameter("0", "Citcoms.Solver.tracer");
   parameters["Q0_enriched"] = Parameter("0.0", "Citcoms.Solver.tracer");
 
   // CitcomS.solver.visc
-  parameters["Viscosity"] = Parameter("\"system\"", "CitcomS.solver.visc");
+  parameters["Viscosity"] = Parameter("system", "CitcomS.solver.visc");
   parameters["visc_smooth_method"] = Parameter("3", "CitcomS.solver.visc");
   parameters["VISC_UPDATE"] = Parameter("1", "CitcomS.solver.visc");
   parameters["num_mat"] = Parameter("4", "CitcomS.solver.visc",true);
@@ -279,7 +314,7 @@ void Py2CConverter::initialize_parameters()
   parameters["visc_max"] = Parameter("1000", "CitcomS.solver.visc");
   parameters["z_layer"] = Parameter("-999,-999,-999,-999", "CitcomS.solver.visc");
   parameters["visc_layer_control"] = Parameter("0", "CitcomS.solver.visc");
-  parameters["visc_layer_file"] = Parameter("visc.dat", "CitcomS.solver.visc");
+  parameters["visc_layer_file"] = Parameter("\"visc.dat\"", "CitcomS.solver.visc");
 }
 
 void Py2CConverter::load()

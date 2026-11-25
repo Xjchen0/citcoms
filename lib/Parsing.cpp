@@ -118,32 +118,48 @@ void setup_parser(struct All_variables *E, const char *filename)
       /* loop over entries on each line */
     loop:
       while(*pl==' ' || *pl=='\t') pl++;
-      if(*pl=='\0'|| *pl=='\n') continue; /* end of line */
+      if(*pl=='\0'|| *pl=='\n' || *pl=='\r') continue; /* end of line */
       if(*pl=='#') continue; /* end of interpretable part of line */
 
       /* get name */
       pn= name;
       while(*pl != '=' && *pl != '\0' && *pl != ' '
-	    && *pl != '\n'		/* FIX by Glenn Nelson */
-	    && *pl != '\t')
+	    && *pl != '\n' && *pl != '\r'
+	    && *pl != '\t' && *pl != '#')
 	*pn++ = *pl++;
       *pn = '\0';
-      if(*pl == '=') pl++;
+      if(name[0] == '\0') continue;
 
-      /* get value */
+      /* allow optional whitespace around '=' (e.g. key=val or key = val) */
+      while(*pl==' ' || *pl=='\t') pl++;
+      if(*pl == '=') {
+        pl++;
+        while(*pl==' ' || *pl=='\t') pl++;
+      }
+
+      /* get value (quotes are optional; typically only needed for paths with spaces) */
       *value= '\0';
       pv= value;
-      if(*pl=='"' || *pl=='\'')
-	t1= t2= *pl++;
-      else
-	{ t1= ' ';
-	  t2= '\t';
-	}
-      while(*pl!=t1 && *pl!=t2 &&
-	    *pl!='\0' && *pl!='\n') *pv++= *pl++;
+      if(*pl=='"' || *pl=='\'') {
+        t1 = *pl++;
+        while(*pl!=t1 && *pl!='\0' && *pl!='\n' && *pl!='\r')
+          *pv++ = *pl++;
+        if(*pl==t1) pl++;
+      } else {
+        while(*pl!='#' && *pl!='\0' && *pl!='\n' && *pl!='\r') {
+          if (*pl==' ' || *pl=='\t') {
+            /* Allow optional spaces immediately after a comma in unquoted lists (e.g. a, b, c) */
+            if (pv > value && *(pv - 1) == ',') {
+              while (*pl==' ' || *pl=='\t') pl++;
+              if (*pl=='#' || *pl=='\0' || *pl=='\n' || *pl=='\r') break;
+              continue;
+            }
+            break;
+          }
+          *pv++ = *pl++;
+        }
+      }
       *pv= '\0';
-      if(*pl=='"' || *pl=='\'')
-	pl++;
       add_to_parameter_list(name,value);
 
       goto loop;
@@ -406,9 +422,11 @@ int input_boolean(const char *name, int *value, const char *interpret, int m)  /
       return(0);
     }
 
-  if((strstr(str,"on")!=NULL) || (strstr(str,"ON")!=NULL))
+  if((strstr(str,"on")!=NULL) || (strstr(str,"ON")!=NULL) ||
+     (strcasecmp(str,"true")==0) || (strcasecmp(str,"yes")==0))
     *value=1;
-  else if ((strstr(str,"off") != NULL) || (strstr(str,"OFF")!=NULL))
+  else if ((strstr(str,"off") != NULL) || (strstr(str,"OFF")!=NULL) ||
+           (strcasecmp(str,"false")==0) || (strcasecmp(str,"no")==0))
     *value=0;
   else /* assume some numerical value */
     *value=atoi(str);
