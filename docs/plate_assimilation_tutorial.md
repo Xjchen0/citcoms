@@ -16,7 +16,7 @@
 在每一步根据当前地质年代 $t_{\text{age}}$（Ma），对相邻整百万年的地表速度场 $v_\theta, v_\phi$ 进行线性插值并作为顶面 Dirichlet 速度边界条件（`topvbc=1`）。
 
 #### 2. 时变岩石圈热结构同化（`lith_age=1`, `lith_age_time=1`）
-读取海底/大陆岩石圈热年龄场 $A(\theta, \phi, t)$（无量纲化后记为 $A_{\text{nd}} = A / \text{scalet}$ ），基于半空间冷却模型计算理论温度 $T_{\text{lith}} = T_m \operatorname{erf}\left(\frac{z}{2\sqrt{A_{\text{nd}}}}\right)$ ，并利用深度平滑混合权重将动力学温度与同化温度平滑过渡：
+读取海底/大陆岩石圈热年龄场 $A(\theta, \phi, t)$（无量纲化后记为 $A_{\text{nd}} = A / \text{scalet}$ ），基于半空间冷却模型计算理论温度 $T_{\text{lith}} = T_m \mathrm{erf}\left(\frac{z}{2\sqrt{A_{\text{nd}}}}\right)$ ，并利用深度平滑混合权重将动力学温度与同化温度平滑过渡：
 
 $$
 T_{\text{new}} = \mathrm{daf} \cdot T_{\text{dyn}} + (1 - \mathrm{daf}) \cdot T_{\text{lith}}, \qquad \mathrm{daf} = \left(\frac{z}{z_{\text{lith}}}\right)^p
